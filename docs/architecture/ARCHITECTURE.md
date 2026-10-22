@@ -1,0 +1,47 @@
+# Kiến trúc tuần 5–6
+
+```mermaid
+flowchart TD
+  U[Admin / Doctor / Patient] --> WEB[React + TypeScript + Vite :3000]
+  WEB --> SDK[Medplum SDK + SignInForm]
+  SDK --> API[Express :8103]
+  API --> AUTH[Auth PKCE / token / membership]
+  API --> FHIR[FHIR Router: Patient / Practitioner / Appointment]
+  AUTH --> REPO[Repository + AccessPolicy + validation]
+  FHIR --> REPO
+  REPO --> PG[(PostgreSQL 16)]
+  REPO --> R[(Redis 7: cache / auth)]
+```
+
+Backend là bản tách modular monolith Medplum. Docker chạy PostgreSQL và Redis, API/web chạy source trên host. Chưa triển khai cloud hoặc worker nghiệp vụ.
+
+## Dữ liệu
+
+User chứa tài khoản và password bcrypt hash. ProjectMembership nối User, Project và profile. Practitioner là profile nhân viên; admin flag và AccessPolicy xác định quyền quản trị. Patient là hồ sơ bệnh nhân, có thể chưa có tài khoản. CRUD Patient không tự tạo User; invite Patient tạo User/profile/membership liên kết.
+
+Appointment.participant.actor tham chiếu Patient/Practitioner; chưa có Slot hoặc chống trùng lịch. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
+
+Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR chưa triển khai.
+
+## Auth và quyền
+
+SignInForm lấy project ID công khai, gửi email/password với PKCE, chọn membership nếu cần, đổi code thành access/refresh token và tải auth/me. SDK lưu/khôi phục phiên; logout thu hồi Login ở backend rồi xóa phiên client.
+
+| Khả năng                         | Admin                             | Doctor                       | Patient                     |
+| -------------------------------- | --------------------------------- | ---------------------------- | --------------------------- |
+| Đăng nhập/dashboard/logout       | Có                                | Có                           | Có                          |
+| Tạo/khóa tài khoản và membership | Trong project                     | Không                        | Không                       |
+| Patient                          | Trong project                     | Policy Practitioner mặc định | Compartment cá nhân         |
+| Practitioner                     | Quản lý cơ bản                    | Policy mặc định; UI xem      | Không có màn hình danh sách |
+| Appointment API                  | Trong project                     | Policy mặc định              | Compartment cá nhân         |
+| Project khác                     | Không nếu không có liên kết riêng | Không                        | Không                       |
+
+Ma trận là phạm vi demo/UI; backend thực thi policy upstream, không có hệ RBAC song song. Practitioner có quyền ghi nhiều resource nghiệp vụ nhưng không phải project-admin. Menu không thay thế backend authorization.
+
+## Quyết định
+
+1. Tách backend cần thiết và dùng SDK/component npm để hạn chế phần phải bảo trì.
+2. Giữ FHIR API và auth upstream, không thêm bảng User hoặc CRUD REST song song.
+3. Docker dependency local đáp ứng tuần 5; đóng gói image/cloud là mốc sau.
+4. Project demo bật validate-terminology để từ chối code FHIR không hợp lệ.
+5. Tất cả dữ liệu demo giả lập, chỉ dùng localhost.

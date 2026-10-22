@@ -1,0 +1,762 @@
+import { normalizeErrorString } from '@medplum/core';
+import type { Appointment, Patient, Practitioner, ProjectMembership, ResourceType, User } from '@medplum/fhirtypes';
+import { SignInForm, useMedplum, useMedplumProfile } from '@medplum/react';
+import { useCallback, useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
+import { getRole, personName, ROLE_LABELS } from './access';
+import type { HospitalRole } from './access';
+
+function ErrorMessage({ error }: { error: unknown }) {
+  return error ? (
+    <div className="notice error" role="alert">
+      {normalizeErrorString(error)}
+    </div>
+  ) : null;
+}
+
+export function App() {
+  const client = useMedplum();
+  const profile = useMedplumProfile();
+  const navigate = useNavigate();
+  const [error, setError] = useState<unknown>();
+  const [projectId, setProjectId] = useState<string>();
+  useEffect(() => {
+    fetch(new URL('config/public', client.getBaseUrl()))
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Chạy npm run seed để khởi tạo project demo.');
+        return response.json();
+      })
+      .then((config) => setProjectId(config.projectId))
+      .catch(setError);
+  }, [client]);
+  if (client.isLoading()) return <main className="loading">Đang khôi phục phiên…</main>;
+  if (!profile)
+    return (
+      <Routes>
+        <Route
+          path="/signin"
+          element={
+            <div className="login-layout">
+              <section className="login-story">
+                <div className="brand-mark">+</div>
+                <span className="eyebrow">SMART HOSPITAL PLATFORM</span>
+                <h1>
+                  Kết nối chăm sóc.
+                  <br />
+                  Đồng hành sức khỏe.
+                </h1>
+                <p>Không gian làm việc chung cho quản trị viên, bác sĩ và bệnh nhân.</p>
+                <span className="edition">Nền tảng quản lý bệnh viện · FHIR</span>
+              </section>
+              <main className="login-form">
+                <ErrorMessage error={error} />
+                {!projectId ? (
+                  <p className="muted">Đang tải cấu hình bệnh viện…</p>
+                ) : (
+                  <SignInForm projectId={projectId} disableGoogleAuth onSuccess={() => navigate('/dashboard')}>
+                    <h2>Chào mừng trở lại</h2>
+                    <p className="muted">Đăng nhập với tài khoản bệnh viện của bạn.</p>
+                  </SignInForm>
+                )}
+              </main>
+            </div>
+          }
+        />
+        <Route path="*" element={<Navigate to="/signin" replace />} />
+      </Routes>
+    );
+  const role = getRole(client.getProjectMembership(), profile);
+  if (!role)
+    return (
+      <div role="alert">
+        Tài khoản chưa được cấu hình vai trò.<button onClick={() => client.signOut()}>Đăng xuất</button>
+      </div>
+    );
+  async function signOut() {
+    try {
+      await client.signOut();
+      navigate('/signin');
+    } catch (e) {
+      setError(e);
+    }
+  }
+  return (
+    <div className="workspace">
+      <aside className="sidebar">
+        <Link to="/dashboard" className="wordmark">
+          <span className="brand-mark small">+</span>
+          <span>
+            Smart Hospital<small>CARE WORKSPACE</small>
+          </span>
+        </Link>
+        <div className="sidebar-label">KHÔNG GIAN LÀM VIỆC</div>
+        <nav>
+          <NavLink to="/dashboard">◈ Tổng quan</NavLink>
+          {role !== 'Patient' && (
+            <>
+              <NavLink to="/patients">♡ Bệnh nhân</NavLink>
+              <NavLink to="/doctors">✚ Bác sĩ</NavLink>
+            </>
+          )}
+          {role === 'Patient' && <NavLink to={`/patients/${profile.id}`}>♡ Hồ sơ của tôi</NavLink>}
+          {role === 'Admin' && <NavLink to="/users">▤ Người dùng</NavLink>}
+        </nav>
+        <div className="sidebar-bottom">
+          <span className="status-dot" /> Local environment<small>Powered by Medplum · FHIR R4</small>
+        </div>
+      </aside>
+      <div className="main-area">
+        <header className="topbar">
+          <div>
+            <span className="muted">Bệnh viện / </span>
+            {ROLE_LABELS[role]}
+          </div>
+          <div className="account">
+            <span className="avatar">{personName(profile as Patient).slice(0, 1)}</span>
+            <span>
+              {personName(profile as Patient)}
+              <small>{role}</small>
+            </span>
+            <button className="button secondary" onClick={signOut}>
+              Đăng xuất
+            </button>
+          </div>
+        </header>
+        <main className="content">
+          <ErrorMessage error={error} />
+          <Routes>
+            <Route path="/dashboard" element={<Dashboard role={role} />} />
+            <Route
+              path="/patients"
+              element={
+                role !== 'Patient' ? <PeopleList type="Patient" /> : <Navigate to={`/patients/${profile.id}`} replace />
+              }
+            />
+            <Route path="/doctors" element={role !== 'Patient' ? <PeopleList type="Practitioner" /> : <Forbidden />} />
+            <Route
+              path="/patients/new"
+              element={role !== 'Patient' ? <PersonEditor type="Patient" /> : <Forbidden />}
+            />
+            <Route
+              path="/doctors/new"
+              element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
+            />
+            <Route path="/patients/:id/edit" element={<PersonEditor type="Patient" />} />
+            <Route
+              path="/doctors/:id/edit"
+              element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
+            />
+            <Route path="/patients/:id" element={<PersonDetails type="Patient" />} />
+            <Route
+              path="/doctors/:id"
+              element={role !== 'Patient' ? <PersonDetails type="Practitioner" /> : <Forbidden />}
+            />
+            <Route path="/users" element={role === 'Admin' ? <Users /> : <Forbidden />} />
+            <Route path="/signin" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </main>
+        <footer>
+          Smart Hospital Platform <span>Quản lý tài khoản & hồ sơ bệnh nhân</span>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function Forbidden() {
+  return (
+    <div className="notice error" role="alert">
+      Bạn không có quyền truy cập chức năng này.
+    </div>
+  );
+}
+
+function Dashboard({ role }: { role: HospitalRole }) {
+  const client = useMedplum();
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [error, setError] = useState<unknown>();
+  useEffect(() => {
+    let live = true;
+    const types: ResourceType[] =
+      role === 'Patient' ? ['Patient', 'Appointment'] : ['Patient', 'Practitioner', 'Appointment'];
+    Promise.all(
+      types.map(
+        async (type) =>
+          [type, (await client.search(type, { _summary: 'count', _total: 'accurate' })).total ?? 0] as const
+      )
+    )
+      .then((entries) => {
+        if (live) setStats(Object.fromEntries(entries));
+      })
+      .catch((e) => {
+        if (live) setError(e);
+      });
+    client
+      .searchResources('Appointment', { _count: '5', _sort: 'date' })
+      .then((data) => {
+        if (live) setAppointments(data);
+      })
+      .catch((e) => {
+        if (live) setError(e);
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, role]);
+  return (
+    <>
+      <PageTitle
+        eyebrow="WORKSPACE OVERVIEW"
+        title={`Tổng quan ${ROLE_LABELS[role].toLowerCase()}`}
+        description="Dữ liệu trong phạm vi quyền truy cập của bạn."
+      />
+      <ErrorMessage error={error} />
+      <div className="stat-grid">
+        {Object.entries(stats).map(([type, count]) => (
+          <section className="stat-card" key={type}>
+            <span>
+              {
+                (
+                  { Patient: 'Hồ sơ bệnh nhân', Practitioner: 'Bác sĩ', Appointment: 'Lịch hẹn cơ bản' } as Record<
+                    string,
+                    string
+                  >
+                )[type]
+              }
+            </span>
+            <strong>{count}</strong>
+            <small>Đồng bộ từ FHIR API</small>
+          </section>
+        ))}
+      </div>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Lịch hẹn trong hệ thống</h2>
+            <p className="muted">Lịch hẹn mẫu · Chưa hỗ trợ quy trình đặt lịch</p>
+          </div>
+          <span className="pill">FHIR Appointment</span>
+        </div>
+        {appointments.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Thời gian</th>
+                  <th>Nội dung</th>
+                  <th>Trạng thái</th>
+                </tr>
+              </thead>
+              <tbody>
+                {appointments.map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.start ? new Date(a.start).toLocaleString('vi-VN') : 'Chưa xác định'}</td>
+                    <td>{a.description}</td>
+                    <td>
+                      <span className="pill">{a.status}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="empty">Chưa có lịch hẹn trong phạm vi truy cập.</p>
+        )}
+      </section>
+      <section className="info-banner">
+        <span>✦</span>
+        <div>
+          <h3>Một hồ sơ, thông tin nhất quán</h3>
+          <p>
+            Dữ liệu Patient và Practitioner được tổ chức theo FHIR R4. Mọi truy cập đều được backend kiểm tra quyền.
+          </p>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function PageTitle({
+  eyebrow,
+  title,
+  description,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="page-heading">
+      <div>
+        <span className="eyebrow">{eyebrow}</span>
+        <h1>{title}</h1>
+        <p className="muted">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function PeopleList({ type }: { type: 'Patient' | 'Practitioner' }) {
+  const client = useMedplum();
+  const [items, setItems] = useState<(Patient | Practitioner)[]>([]);
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState<unknown>();
+  const [loading, setLoading] = useState(true);
+  const base = type === 'Patient' ? '/patients' : '/doctors';
+  const admin = client.getProjectMembership()?.admin;
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      setItems(
+        await client.searchResources(type, {
+          ...(query.trim() ? { name: query.trim() } : {}),
+          _count: '100',
+          _sort: '-_lastUpdated',
+        })
+      );
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+  }, [client, type, query]);
+  useEffect(() => {
+    setItems([]);
+    void load();
+  }, [type]);
+  return (
+    <>
+      <PageTitle
+        eyebrow={type === 'Patient' ? 'PATIENT DIRECTORY' : 'CARE TEAM'}
+        title={type === 'Patient' ? 'Quản lý bệnh nhân' : 'Danh sách bác sĩ'}
+        description="Tìm kiếm và quản lý thông tin hồ sơ theo chuẩn FHIR."
+        action={
+          (type === 'Patient' || admin) && (
+            <Link className="button primary" to={`${base}/new`}>
+              + Thêm {type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}
+            </Link>
+          )
+        }
+      />
+      <section className="panel">
+        <form
+          className="toolbar"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void load();
+          }}
+        >
+          <label htmlFor="search" className="sr-only">
+            Tìm theo tên
+          </label>
+          <input id="search" placeholder="Tìm theo tên…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <button className="button secondary">Tìm kiếm</button>
+          <span className="muted">{items.length} hồ sơ</span>
+        </form>
+        <ErrorMessage error={error} />
+        {loading ? (
+          <p className="empty">Đang tải hồ sơ…</p>
+        ) : items.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Họ và tên</th>
+                  <th>Giới tính</th>
+                  <th>Liên hệ</th>
+                  <th>Trạng thái</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <Link to={`${base}/${item.id}`} className="person-link">
+                        {personName(item)}
+                      </Link>
+                      <small>{item.identifier?.[0]?.value ?? item.id?.slice(0, 8)}</small>
+                    </td>
+                    <td>{item.gender ?? '—'}</td>
+                    <td>{item.telecom?.find((t) => t.system === 'phone')?.value ?? '—'}</td>
+                    <td>
+                      <span className={`pill ${item.active === false ? 'inactive' : ''}`}>
+                        {item.active === false ? 'Ngừng hoạt động' : 'Đang hoạt động'}
+                      </span>
+                    </td>
+                    <td>
+                      <Link to={`${base}/${item.id}`}>Xem hồ sơ →</Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="empty">Không tìm thấy hồ sơ phù hợp.</p>
+        )}
+      </section>
+    </>
+  );
+}
+
+function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
+  const client = useMedplum();
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [person, setPerson] = useState<Patient | Practitioner>();
+  const [error, setError] = useState<unknown>();
+  const role = getRole(client.getProjectMembership(), client.getProfile());
+  const base = type === 'Patient' ? '/patients' : '/doctors';
+  useEffect(() => {
+    setPerson(undefined);
+    setError(undefined);
+    client.readResource(type, id!).then(setPerson).catch(setError);
+  }, [client, type, id]);
+  async function remove() {
+    if (!window.confirm('Xóa mềm hồ sơ này?')) return;
+    try {
+      await client.deleteResource(type, id!);
+      navigate(base);
+    } catch (e) {
+      setError(e);
+    }
+  }
+  const canEdit = type === 'Patient' || role === 'Admin';
+  return (
+    <>
+      <PageTitle
+        eyebrow="PERSON RECORD"
+        title={person ? personName(person) : 'Hồ sơ'}
+        description={`${type} · ${id}`}
+        action={
+          canEdit &&
+          person && (
+            <Link className="button primary" to={`${base}/${id}/edit`}>
+              Chỉnh sửa hồ sơ
+            </Link>
+          )
+        }
+      />
+      <ErrorMessage error={error} />
+      {person && (
+        <section className="panel details">
+          <h2>Thông tin cá nhân</h2>
+          <dl>
+            <dt>Họ và tên</dt>
+            <dd>{personName(person)}</dd>
+            <dt>Ngày sinh</dt>
+            <dd>{person.birthDate ?? '—'}</dd>
+            <dt>Giới tính</dt>
+            <dd>{person.gender ?? '—'}</dd>
+            <dt>Điện thoại</dt>
+            <dd>{person.telecom?.find((t) => t.system === 'phone')?.value ?? '—'}</dd>
+            <dt>Email</dt>
+            <dd>{person.telecom?.find((t) => t.system === 'email')?.value ?? '—'}</dd>
+            <dt>Địa chỉ</dt>
+            <dd>{person.address?.[0]?.text ?? '—'}</dd>
+            <dt>Cập nhật lần cuối</dt>
+            <dd>{person.meta?.lastUpdated ? new Date(person.meta.lastUpdated).toLocaleString('vi-VN') : '—'}</dd>
+          </dl>
+          {role === 'Admin' && (
+            <button className="button danger" onClick={remove}>
+              Xóa mềm hồ sơ
+            </button>
+          )}
+        </section>
+      )}
+    </>
+  );
+}
+
+function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
+  const client = useMedplum();
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [person, setPerson] = useState<Patient | Practitioner>();
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const base = type === 'Patient' ? '/patients' : '/doctors';
+  useEffect(() => {
+    setPerson(undefined);
+    if (id) client.readResource(type, id).then(setPerson).catch(setError);
+    else setPerson({ resourceType: type, active: true });
+  }, [client, id, type]);
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!person) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    setError(undefined);
+    const resource = {
+      ...person,
+      name: [{ family: String(data.get('family')).trim(), given: [String(data.get('given')).trim()] }],
+      gender: String(data.get('gender')) || undefined,
+      birthDate: String(data.get('birthDate')) || undefined,
+      telecom: [
+        { system: 'phone', value: String(data.get('phone')) },
+        { system: 'email', value: String(data.get('email')) },
+      ].filter((t) => t.value),
+      address: [{ text: String(data.get('address')) }],
+      active: data.get('active') === 'on',
+    } as Patient | Practitioner;
+    try {
+      const result = resource.id ? await client.updateResource(resource) : await client.createResource(resource);
+      navigate(`${base}/${result.id}`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <PageTitle
+        eyebrow="PERSON RECORD"
+        title={`${id ? 'Chỉnh sửa' : 'Thêm'} ${type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}`}
+        description="Thông tin được kiểm tra và lưu trực tiếp qua FHIR API."
+      />
+      <ErrorMessage error={error} />
+      {person && (
+        <form className="panel editor" onSubmit={save}>
+          <div className="form-grid">
+            <label>
+              Họ
+              <input name="family" required maxLength={100} defaultValue={person.name?.[0]?.family} />
+            </label>
+            <label>
+              Tên
+              <input name="given" required maxLength={100} defaultValue={person.name?.[0]?.given?.join(' ')} />
+            </label>
+            <label>
+              Ngày sinh
+              <input
+                name="birthDate"
+                type="date"
+                max={new Date().toISOString().slice(0, 10)}
+                defaultValue={person.birthDate}
+              />
+            </label>
+            <label>
+              Giới tính
+              <select name="gender" defaultValue={person.gender ?? ''}>
+                <option value="">Chưa xác định</option>
+                <option value="male">Nam</option>
+                <option value="female">Nữ</option>
+                <option value="other">Khác</option>
+                <option value="unknown">Không rõ</option>
+              </select>
+            </label>
+            <label>
+              Điện thoại
+              <input
+                name="phone"
+                type="tel"
+                maxLength={30}
+                defaultValue={person.telecom?.find((t) => t.system === 'phone')?.value}
+              />
+            </label>
+            <label>
+              Email
+              <input
+                name="email"
+                type="email"
+                defaultValue={person.telecom?.find((t) => t.system === 'email')?.value}
+              />
+            </label>
+            <label className="full-width">
+              Địa chỉ
+              <input name="address" maxLength={300} defaultValue={person.address?.[0]?.text} />
+            </label>
+          </div>
+          <label className="checkbox">
+            <input name="active" type="checkbox" defaultChecked={person.active !== false} />
+            Đang hoạt động
+          </label>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy}>
+              {busy ? 'Đang lưu…' : 'Lưu hồ sơ'}
+            </button>
+            <Link className="button secondary" to={id ? `${base}/${id}` : base}>
+              Hủy
+            </Link>
+          </div>
+        </form>
+      )}
+    </>
+  );
+}
+
+function Users() {
+  const client = useMedplum();
+  const [members, setMembers] = useState<ProjectMembership[]>([]);
+  const [users, setUsers] = useState<Record<string, User>>({});
+  const [profiles, setProfiles] = useState<Record<string, Patient | Practitioner>>({});
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const load = useCallback(async () => {
+    const data = await client.searchResources('ProjectMembership', { _count: '100' });
+    const humanMembers = data.filter(
+      (member) =>
+        member.user.reference?.startsWith('User/') &&
+        (member.profile.reference?.startsWith('Patient/') || member.profile.reference?.startsWith('Practitioner/'))
+    );
+    setMembers(humanMembers);
+    const profileData = await Promise.all(
+      humanMembers.map((member) => {
+        const [type, id] = member.profile.reference!.split('/');
+        return client.readResource(type as 'Patient' | 'Practitioner', id);
+      })
+    );
+    setProfiles(Object.fromEntries(profileData.map((profile) => [`${profile.resourceType}/${profile.id}`, profile])));
+    const people = await client.searchResources('User', { _count: '100' });
+    setUsers(Object.fromEntries(people.map((u) => [u.id!, u])));
+  }, [client]);
+  useEffect(() => {
+    void load().catch(setError);
+  }, [load]);
+  async function invite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.invite(client.getProject()!.id!, {
+        resourceType: data.get('role') === 'Patient' ? 'Patient' : 'Practitioner',
+        firstName: String(data.get('firstName')).trim(),
+        lastName: String(data.get('lastName')).trim(),
+        email: String(data.get('email')),
+        password: String(data.get('password')),
+        admin: data.get('role') === 'Admin',
+        sendEmail: false,
+      });
+      for (const type of ['ProjectMembership', 'User', 'Patient', 'Practitioner'] as const) {
+        client.invalidateSearches(type);
+      }
+      form.reset();
+      await load();
+      setMessage('Đã tạo tài khoản local thành công.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function toggle(member: ProjectMembership) {
+    if (member.id === client.getProjectMembership()?.id) return;
+    try {
+      await client.updateResource({ ...member, active: member.active === false });
+      await load();
+    } catch (e) {
+      setError(e);
+    }
+  }
+  return (
+    <>
+      <PageTitle
+        eyebrow="ACCESS MANAGEMENT"
+        title="Quản lý người dùng"
+        description="Tài khoản và quyền truy cập trong project bệnh viện."
+      />
+      <ErrorMessage error={error} />
+      {message && (
+        <p role="status" className="notice">
+          {message}
+        </p>
+      )}
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Thành viên</h2>
+          <span className="pill">{members.length} tài khoản</span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Người dùng</th>
+                <th>Vai trò</th>
+                <th>Trạng thái</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((member) => {
+                const user = users[member.user.reference?.split('/')[1] ?? ''];
+                const profile = profiles[member.profile.reference ?? ''];
+                return (
+                  <tr key={member.id}>
+                    <td>
+                      {user
+                        ? `${user.firstName} ${user.lastName}`
+                        : profile
+                          ? personName(profile)
+                          : (member.profile.display ?? member.id)}
+                      <small>
+                        {user?.email ?? profile?.telecom?.find((contact) => contact.system === 'email')?.value}
+                      </small>
+                    </td>
+                    <td>
+                      {member.admin ? 'Admin' : member.profile.reference?.startsWith('Patient/') ? 'Patient' : 'Doctor'}
+                    </td>
+                    <td>{member.active === false ? 'Đã khóa' : 'Hoạt động'}</td>
+                    <td>
+                      {member.id !== client.getProjectMembership()?.id && (
+                        <button className="button secondary" onClick={() => toggle(member)}>
+                          {member.active === false ? 'Mở khóa' : 'Khóa tài khoản'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <form className="panel editor" onSubmit={invite}>
+        <h2>Tạo tài khoản local</h2>
+        <p className="muted">Dùng cơ chế invite của Medplum. Mật khẩu được đặt trực tiếp, không gửi email.</p>
+        <div className="form-grid">
+          <label>
+            Tên người dùng
+            <input name="firstName" required />
+          </label>
+          <label>
+            Họ người dùng
+            <input name="lastName" required />
+          </label>
+          <label>
+            Email đăng nhập
+            <input name="email" type="email" required />
+          </label>
+          <label>
+            Mật khẩu ban đầu
+            <input name="password" type="password" minLength={8} autoComplete="new-password" required />
+          </label>
+          <label>
+            Vai trò
+            <select name="role">
+              <option>Doctor</option>
+              <option>Patient</option>
+              <option>Admin</option>
+            </select>
+          </label>
+        </div>
+        <button className="button primary" disabled={busy}>
+          {busy ? 'Đang tạo…' : 'Tạo tài khoản'}
+        </button>
+      </form>
+    </>
+  );
+}
