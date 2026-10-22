@@ -52,35 +52,17 @@ jobs:
       - run: npm install --global npm@11.21.1
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run services:up
-      - run: npm run build
-      - run: npm run seed
-      - name: Start API and wait for dependencies
+      - name: Build and start container stack
+        run: docker compose up --build -d --wait --wait-timeout 600
+      - name: Copy matching demo fixture
         shell: bash
         run: |
-          npm run start -w @smart-hospital/server > "$RUNNER_TEMP/smart-hospital-api.log" 2>&1 &
-          api_pid=$!
-          for attempt in {1..60}; do
-            if ! kill -0 "$api_pid" 2>/dev/null; then
-              echo "API process exited; inspect the runner-local log."
-              exit 1
-            fi
-            if curl --fail --silent http://localhost:8103/healthcheck | node --input-type=module -e '
-              let body = "";
-              for await (const chunk of process.stdin) body += chunk;
-              try {
-                const health = JSON.parse(body);
-                process.exit(health.ok && health.postgres && health.redis ? 0 : 1);
-              } catch { process.exit(1); }
-            '; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "API readiness timed out."
-          exit 1
+          mkdir -p .runtime
+          docker compose cp seed:/app/.runtime/demo.json .runtime/demo.json
       - run: npm run test:api
       - run: npm run test:e2e
+        env:
+          E2E_EXTERNAL_SERVER: '1'
       - name: Stop CI services
         if: always()
         run: docker compose down

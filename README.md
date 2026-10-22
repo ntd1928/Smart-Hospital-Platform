@@ -2,9 +2,29 @@
 
 Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại tập trung vào đăng nhập, phân quyền, quản lý tài khoản và hồ sơ bệnh nhân trên FHIR API.
 
-Frontend React/TypeScript kết nối backend Node.js, PostgreSQL và Redis. Các dịch vụ dữ liệu chạy bằng Docker Compose; GitHub Actions kiểm tra chất lượng, build và kiểm thử tích hợp. Chưa triển khai lên cloud.
+Frontend React/TypeScript kết nối backend Node.js, PostgreSQL và Redis. Toàn bộ ứng dụng có thể chạy bằng Docker Compose; GitHub Actions được cấu hình kiểm tra chất lượng, build và kiểm thử tích hợp. Chưa triển khai lên cloud.
 
-## Chạy local
+## Chạy demo bằng Docker — khuyến nghị
+
+Chỉ cần Docker Engine/Desktop và Compose v2 đang chạy; không cần cài Node/npm trên máy. Dừng API/Vite chạy source nếu đang chiếm cổng 8103/3000, rồi chạy tại thư mục repo:
+
+```bash
+docker compose up --build -d --wait --wait-timeout 600
+docker compose ps -a
+```
+
+Compose chạy PostgreSQL, Redis, seed dữ liệu một lần cho mỗi đợt khởi động, API Node và frontend Nginx. `seed` thoát mã 0 là bình thường; bốn dịch vụ còn lại cần healthy. Lần đầu tải image, dependency và khởi tạo FHIR có thể mất vài phút. Seed idempotent: chạy lại không nhân bản bộ demo, không xóa dữ liệu đã sửa.
+
+Mở http://localhost:3000; API http://localhost:8103/healthcheck phải có ok/postgres/redis bằng true. Frontend dùng bản build, không phải Vite dev server. Docker vẫn chạy local, chưa phải cloud. Chỉ hỗ trợ trình duyệt trên chính máy này với các cổng mặc định; chưa cấu hình HTTPS hoặc truy cập LAN.
+
+```bash
+docker compose logs --tail=50 seed server web
+docker compose stop
+```
+
+`stop` giữ container và volume. Dùng lại lệnh `up` ở trên để chạy tiếp. Không dùng `down -v` nếu cần giữ dữ liệu. Khi sửa code, chạy lại `up --build` để cập nhật image. Xem [hướng dẫn Docker](docs/development/DOCKER.md) và [demo 10–15 phút](docs/reports/DEMO.md).
+
+## Chạy source để phát triển — tùy chọn
 
 Yêu cầu: Node.js theo .nvmrc (22.22.0), npm 11.21.1, Docker Engine/Desktop và Compose v2 đang hoạt động. Với WSL, bật Desktop integration hoặc dùng Engine trong WSL; không cần chạy hai daemon cùng lúc.
 
@@ -57,7 +77,7 @@ Chưa có workflow lịch khám/chống trùng lịch, EHR/lịch sử khám, S3
 
 ## Kiểm thử
 
-Khi API/dịch vụ đã chạy và seed hoàn tất:
+Với chế độ source, khi API/dịch vụ đã chạy và seed hoàn tất:
 
 ```bash
 npx playwright install chromium
@@ -65,6 +85,14 @@ npm run verify
 ```
 
 Verify chạy typecheck (cả seed/test), lint mã nhóm, format check, unit test, build, API integration và E2E. API test tạo/xóa dữ liệu tạm và kiểm tra quyền trực tiếp. E2E tự chạy Vite nếu cổng 3000 chưa được dùng. Chỉ chạy integration với database demo local.
+
+Với stack Docker đang chạy, kiểm tra API không cần Node trên host:
+
+```bash
+docker compose run --rm --no-deps -e MEDPLUM_BASE_URL=http://server:8103/ seed npm run test:api
+```
+
+Cách chạy browser test lên bản Nginx và đồng bộ fixture nằm trong [DOCKER.md](docs/development/DOCKER.md).
 
 ## Dừng dịch vụ và giữ dữ liệu
 
@@ -74,7 +102,7 @@ npm run services:down
 
 Lệnh dừng container, giữ volume. API/web dừng bằng Ctrl+C. Không dùng docker compose down -v nếu cần giữ dữ liệu. Nếu đổi cổng/mật khẩu Compose, export MEDPLUM_DATABASE_* và MEDPLUM_REDIS_* tương ứng cho API và seed; .env Compose không tự export vào Node. Xem [.env.example](.env.example).
 
-Để kiểm chứng dữ liệu qua restart, dừng API trước rồi chạy `npm run test:persistence`: script restart đúng PostgreSQL/Redis của Compose này và so sánh hồ sơ cùng một khóa thử Redis trước/sau; không xóa volume. Sau đó khởi động lại API. Nếu WSL không dùng systemd và Engine chưa chạy, có thể mở terminal riêng chạy `sudo dockerd` trước khi chạy Compose.
+`npm run test:persistence` dành riêng cho chế độ source với database/cache được publish bằng Compose dev: dừng API trước, dùng fixture đúng database rồi chạy script; không xóa volume. Sau đó khởi động lại API. Với demo toàn Docker, dùng quy trình stop/up và kiểm tra hồ sơ tại [DOCKER.md](docs/development/DOCKER.md), không chạy script source vào database khác. Nếu WSL không dùng systemd và Engine chưa chạy, có thể mở terminal riêng chạy `sudo dockerd`; không khởi động thêm Engine khi đã dùng Docker Desktop integration.
 
 ## Tài liệu
 

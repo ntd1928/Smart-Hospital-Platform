@@ -7,10 +7,12 @@ export default defineConfig({
   expect: { timeout: 12000 },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: { baseURL: 'http://localhost:3000', trace: 'retain-on-failure', screenshot: 'only-on-failure', headless: true },
-  webServer: {
-    command: 'npm run dev:app',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
-    timeout: 45000,
-  },
+  webServer: process.env.E2E_EXTERNAL_SERVER
+    ? undefined
+    : {
+        command: 'npm run dev:app',
+        url: 'http://localhost:3000',
+        reuseExistingServer: !process.env.CI,
+        timeout: 45000,
+      },
 });

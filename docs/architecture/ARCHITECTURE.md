@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-  U[Admin / Doctor / Patient] --> WEB[React + TypeScript + Vite :3000]
+  U[Admin / Doctor / Patient] --> WEB[Nginx + React SPA :3000]
   WEB --> SDK[Medplum SDK + SignInForm]
   SDK --> API[Express :8103]
   API --> AUTH[Auth PKCE / token / membership]
@@ -13,7 +13,7 @@ flowchart TD
   REPO --> R[(Redis 7: cache / auth)]
 ```
 
-Backend là bản tách modular monolith Medplum. Docker chạy PostgreSQL và Redis, API/web chạy source trên host. Chưa triển khai cloud hoặc worker nghiệp vụ.
+Backend là bản tách modular monolith Medplum. Chế độ demo chạy toàn bộ stack Docker: Nginx phục vụ SPA build bằng Vite, API Node, PostgreSQL và Redis. Seed chạy một lần trước API, chờ database/cache healthy; API chờ seed thành công, web chờ API healthy. Dữ liệu nằm trong named volumes, không bake vào image. Chế độ phát triển có thể chạy API/Vite trên host, chỉ database/cache trong Docker. Chưa triển khai cloud hoặc worker nghiệp vụ. Xem [Docker](../development/DOCKER.md).
 
 ## Dữ liệu
 
@@ -42,6 +42,6 @@ Ma trận là phạm vi demo/UI; backend thực thi policy upstream, không có 
 
 1. Tách backend cần thiết và dùng SDK/component npm để hạn chế phần phải bảo trì.
 2. Giữ FHIR API và auth upstream, không thêm bảng User hoặc CRUD REST song song.
-3. Docker dependency local đáp ứng tuần 5; đóng gói image/cloud là mốc sau.
+3. Docker Compose chạy toàn bộ stack demo và build image local; chưa publish registry hoặc triển khai cloud.
 4. Project demo bật validate-terminology để từ chối code FHIR không hợp lệ.
 5. Tất cả dữ liệu demo giả lập, chỉ dùng localhost.

@@ -6,12 +6,12 @@ Giai đoạn hiện tại dùng CI, chưa dùng CD: chưa có staging, domain, c
 
 [ci.yml](../../.github/workflows/ci.yml) chạy trên PR, push main/develop và thao tác Run workflow. Hai job chạy tuần tự:
 
-| Check       | Thực hiện                                                                                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Quality     | Node theo .nvmrc, npm 11.21.1, npm ci, typecheck, lint, format, unit tests, build                                                     |
-| Integration | Runner riêng, cài Chromium, Docker Compose PostgreSQL/Redis, build, seed, khởi động API đã build, healthcheck, API tests, browser E2E |
+| Check       | Thực hiện                                                                                                                         |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Quality     | Node theo .nvmrc, npm 11.21.1, npm ci, typecheck, lint, format, unit tests, build                                                 |
+| Integration | Runner riêng, cài Chromium, build/chạy toàn bộ Compose (PostgreSQL, Redis, seed, API, Nginx), healthcheck, API tests, browser E2E |
 
-Integration dùng cùng Compose local để giữ REPEATABLE READ, Redis password/AOF và healthcheck. Mỗi job chạy trên GitHub-hosted Ubuntu 24.04 sạch, không đụng database local/staging. Seed tự tạo dữ liệu giả và `.runtime/demo.json`. Đầu tiên seed/migration FHIR có thể mất vài phút.
+Integration dùng cùng stack Compose demo để giữ REPEATABLE READ, Redis password/AOF và healthcheck. Seed phải hoàn tất trước API, Nginx chờ API healthy. CI copy fixture từ volume seed sang host trước khi test; E2E_EXTERNAL_SERVER=1 buộc browser kiểm tra SPA Nginx, không khởi động Vite. Mỗi job chạy trên GitHub-hosted Ubuntu 24.04 sạch, không đụng database local/staging. Đầu tiên seed/migration FHIR có thể mất vài phút. Xem [Docker](DOCKER.md).
 
 Không chạy test:persistence trong CI nền tảng vì script restart dịch vụ; chạy riêng local với API đã dừng khi cần kiểm tra volume. Unit/API/E2E hiện không thay thế load test, đánh giá bảo mật đầy đủ hoặc kiểm thử hạ tầng cloud.
 

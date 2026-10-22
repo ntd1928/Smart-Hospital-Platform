@@ -24,8 +24,11 @@
     "test:e2e": "playwright test",
     "test:persistence": "tsx scripts/check-persistence.ts",
     "seed": "tsx scripts/seed.ts",
-    "services:up": "docker compose up -d --wait",
-    "services:down": "docker compose stop"
+    "services:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait postgres redis",
+    "services:down": "docker compose stop",
+    "docker:up": "docker compose up --build -d --wait --wait-timeout 600",
+    "docker:stop": "docker compose stop",
+    "docker:test:api": "docker compose run --rm --no-deps -e MEDPLUM_BASE_URL=http://server:8103/ seed npm run test:api"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

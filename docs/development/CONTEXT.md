@@ -4,7 +4,9 @@ Smart Hospital Platform là đồ án môn Phát triển ứng dụng điện to
 
 ## Kiến trúc hiện tại
 
-React/TypeScript/Vite tại packages/app → SDK @medplum/core → Express/auth/FHIR repository tại packages/server → PostgreSQL 16 và Redis 7 qua Docker Compose. Thư viện Medplum dùng phiên bản cố định 5.2.7. API localhost:8103; web localhost:3000.
+React/TypeScript/Vite tại packages/app → SDK @medplum/core → Express/auth/FHIR repository tại packages/server → PostgreSQL 16 và Redis 7. Thư viện Medplum dùng phiên bản cố định 5.2.7. API localhost:8103; web localhost:3000.
+
+Demo: `docker compose up --build -d --wait --wait-timeout 600` chạy toàn bộ stack. PostgreSQL/Redis healthy → seed hoàn tất → API healthy → Nginx phục vụ SPA đã build. Volume giữ database/cache/demo fixture/binary nội bộ; không dùng dữ liệu thật. Chế độ phát triển vẫn có thể dùng `npm run services:up` chỉ chạy PostgreSQL/Redis, API/Vite chạy trên host. Không chạy hai chế độ đồng thời trên cổng 3000/8103. Xem [Docker](DOCKER.md).
 
 Admin: project-admin Practitioner. Doctor: Practitioner với policy mặc định Medplum. Patient: compartment cá nhân theo policy mặc định. Membership/profile do backend xác thực, không lấy quyền từ query string hoặc localStorage tự đặt. Ba vai trò dùng chung app và dashboard có nội dung theo quyền.
 
