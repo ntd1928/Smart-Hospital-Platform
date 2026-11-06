@@ -288,6 +288,31 @@ small {
   padding: 22px 25px;
   border-top: 1px solid #e9eee9;
 }
+
+.directory-search {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 28rem;
+  margin: 1rem 0;
+  color: #7a8985;
+  font-size: 0.875rem;
+}
+
+.text-button {
+  display: block;
+  padding: 0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: #176b5c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.text-button:disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .directory-card .panel-heading {
   padding: 0;
 }

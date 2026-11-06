@@ -1560,23 +1560,31 @@ function Users() {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
-    const data = await client.searchResources('ProjectMembership', { _count: '100' });
-    const humanMembers = data.filter(
-      (member) =>
-        member.user.reference?.startsWith('User/') &&
-        (member.profile.reference?.startsWith('Patient/') || member.profile.reference?.startsWith('Practitioner/'))
-    );
-    setMembers(humanMembers);
-    const profileData = await Promise.all(
-      humanMembers.map((member) => {
-        const [type, id] = member.profile.reference!.split('/');
-        return client.readResource(type as 'Patient' | 'Practitioner', id);
-      })
-    );
-    setProfiles(Object.fromEntries(profileData.map((profile) => [`${profile.resourceType}/${profile.id}`, profile])));
-    const people = await client.searchResources('User', { _count: '100' });
-    setUsers(Object.fromEntries(people.map((u) => [u.id!, u])));
+    setLoading(true);
+    setError(undefined);
+    try {
+      const data = await client.searchResources('ProjectMembership', { _count: '100' });
+      const humanMembers = data.filter(
+        (member) =>
+          member.user.reference?.startsWith('User/') &&
+          (member.profile.reference?.startsWith('Patient/') || member.profile.reference?.startsWith('Practitioner/'))
+      );
+      setMembers(humanMembers);
+      const profileData = await Promise.all(
+        humanMembers.map((member) => {
+          const [type, id] = member.profile.reference!.split('/');
+          return client.readResource(type as 'Patient' | 'Practitioner', id);
+        })
+      );
+      setProfiles(Object.fromEntries(profileData.map((profile) => [`${profile.resourceType}/${profile.id}`, profile])));
+      const people = await client.searchResources('User', { _count: '100' });
+      setUsers(Object.fromEntries(people.map((u) => [u.id!, u])));
+    } finally {
+      setLoading(false);
+    }
   }, [client]);
   useEffect(() => {
     void load().catch(setError);
@@ -1612,13 +1620,49 @@ function Users() {
   }
   async function toggle(member: ProjectMembership) {
     if (member.id === client.getProjectMembership()?.id) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
     try {
       await client.updateResource({ ...member, active: member.active === false });
       await load();
+      setMessage(member.active === false ? 'Đã mở khóa thành viên.' : 'Đã khóa thành viên.');
     } catch (e) {
       setError(e);
+    } finally {
+      setBusy(false);
     }
   }
+  async function setAdmin(member: ProjectMembership, admin: boolean) {
+    if (!member.id || member.id === client.getProjectMembership()?.id || member.admin === admin) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.updateResource({ ...member, admin });
+      await load();
+      setMessage(admin ? 'Đã cấp quyền Admin.' : 'Đã chuyển thành viên về Doctor.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const visibleMembers = members.filter((member) => {
+    const user = users[member.user.reference?.split('/')[1] ?? ''];
+    const profile = profiles[member.profile.reference ?? ''];
+    const haystack = [
+      user?.firstName,
+      user?.lastName,
+      user?.email,
+      profile ? personName(profile) : '',
+      profile?.telecom?.find((contact) => contact.system === 'email')?.value,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase();
+    return haystack.includes(query.trim().toLocaleLowerCase());
+  });
   return (
     <>
       <PageTitle
@@ -1637,6 +1681,11 @@ function Users() {
           <h2>Thành viên</h2>
           <span className="pill">{members.length} tài khoản</span>
         </div>
+        <label className="directory-search">
+          Tìm tên hoặc email
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tên, họ hoặc email đăng nhập" />
+        </label>
+        {loading && <p className="empty">Đang tải thành viên…</p>}
         <div className="table-wrap">
           <table>
             <thead>
@@ -1648,7 +1697,7 @@ function Users() {
               </tr>
             </thead>
             <tbody>
-              {members.map((member) => {
+              {visibleMembers.map((member) => {
                 const user = users[member.user.reference?.split('/')[1] ?? ''];
                 const profile = profiles[member.profile.reference ?? ''];
                 return (
@@ -1665,11 +1714,18 @@ function Users() {
                     </td>
                     <td>
                       {member.admin ? 'Admin' : member.profile.reference?.startsWith('Patient/') ? 'Patient' : 'Doctor'}
+                      {member.profile.reference?.startsWith('Practitioner/') &&
+                        member.id !== client.getProjectMembership()?.id &&
+                        member.active !== false && (
+                          <button className="text-button" disabled={busy} onClick={() => void setAdmin(member, !member.admin)}>
+                            {member.admin ? 'Chuyển về Doctor' : 'Cấp quyền Admin'}
+                          </button>
+                        )}
                     </td>
                     <td>{member.active === false ? 'Đã khóa' : 'Hoạt động'}</td>
                     <td>
                       {member.id !== client.getProjectMembership()?.id && (
-                        <button className="button secondary" onClick={() => toggle(member)}>
+                        <button className="button secondary" disabled={busy} onClick={() => void toggle(member)}>
                           {member.active === false ? 'Mở khóa' : 'Khóa tài khoản'}
                         </button>
                       )}
@@ -1677,6 +1733,13 @@ function Users() {
                   </tr>
                 );
               })}
+              {!loading && visibleMembers.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty">
+                    Không tìm thấy thành viên phù hợp.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

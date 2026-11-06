@@ -65,6 +65,7 @@ import type {
   Parameters,
   Practitioner,
   Project,
+  ProjectMembership,
   Reference,
   Resource,
   ResourceType,
@@ -972,6 +973,8 @@ export class Repository extends FhirRepository implements Disposable {
         resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       const authenticatedSchedule =
         resource.resourceType === 'Schedule' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedMembership =
+        resource.resourceType === 'ProjectMembership' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       if (authenticatedAppointment) {
         result = await this.withAppointmentWrite(resource, async (repo) => {
           await repo.ensureAppointmentCancellationAllowed(resource);
@@ -986,6 +989,11 @@ export class Repository extends FhirRepository implements Disposable {
       } else if (authenticatedSchedule) {
         result = await this.withScheduleWrite(resource, async (repo) => {
           await repo.ensureScheduleMutationAllowed(resource);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (authenticatedMembership) {
+        result = await this.withProjectMembershipWrite(resource, async (repo) => {
+          await repo.ensureActiveProjectAdmin(resource);
           return repo.updateResourceImpl(resource, false, options);
         });
       } else if (options?.ifMatch) {
@@ -1005,6 +1013,52 @@ export class Repository extends FhirRepository implements Disposable {
       const durationMs = Date.now() - startTime;
       this.logEvent(UpdateInteraction, AuditEventOutcome.MinorFailure, err, { resource, durationMs });
       throw err;
+    }
+  }
+
+  private async withProjectMembershipWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      const membership = resource as ProjectMembership;
+      const existing = membership.id
+        ? await repo.readResource<ProjectMembership>('ProjectMembership', membership.id)
+        : undefined;
+      const projectId = resolveId(existing?.project ?? membership.project);
+      if (projectId) {
+        await repo.executeRawSql(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`${projectId}:ProjectMembership:active-admin`],
+          { resourceTypes: 'ProjectMembership', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockProjectAdmin' }
+        );
+      }
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'ProjectMembership',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.projectMembershipWrite',
+    });
+  }
+
+  private async ensureActiveProjectAdmin(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'ProjectMembership' || !resource.id) return;
+    const next = resource as ProjectMembership;
+    if (next.admin === true && next.active !== false) return;
+    const current = await this.readResource<ProjectMembership>('ProjectMembership', next.id);
+    if (current.admin !== true || current.active === false) return;
+    const projectId = resolveId(current.project);
+    if (!projectId) return;
+    let hasOtherActiveAdmin = false;
+    await this.processAllResources<ProjectMembership>(
+      { resourceType: 'ProjectMembership', project: `Project/${projectId}` },
+      async (membership) => {
+        if (membership.id !== current.id && membership.admin === true && membership.active !== false) {
+          hasOtherActiveAdmin = true;
+        }
+      }
+    );
+    if (!hasOtherActiveAdmin) {
+      throw new OperationOutcomeError(badRequest('A project must keep at least one active administrator.'));
     }
   }
 

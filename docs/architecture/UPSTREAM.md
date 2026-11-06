@@ -10,7 +10,7 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 
 ## Điều chỉnh
 
-- App/router mở auth, invite quản trị, Patient/Practitioner, Organization/HealthcareService, Appointment/Schedule/Slot và API Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance; app có danh mục Khoa/Dịch vụ và trang EHR cơ bản cho ghi/đọc resource, gồm kê thuốc, ghi nhận lần dùng, đối soát thuốc và dị ứng. Chưa có đầy đủ vòng đời EHR hoặc kiểm tra tương tác thuốc-dị ứng. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
+- App/router mở auth, invite quản trị, Patient/Practitioner, Organization/HealthcareService, Appointment/Schedule/Slot và API Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance; app có danh mục Khoa/Dịch vụ, quản lý membership và trang EHR cơ bản cho ghi/đọc resource. Cập nhật ProjectMembership được tuần tự hóa để không thể hạ quyền/ngừng Admin cuối cùng. Chưa có đầy đủ vòng đời EHR hoặc kiểm tra tương tác thuốc-dị ứng. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
 - Repository giữ CRUD, policy, transaction, search, history; bỏ hook Bot pre-commit và background/subscription/WebSocket jobs. Không có worker giả thay thế.
 - Config chỉ giữ file/env; storage nội bộ chỉ filesystem; bỏ cloud config/storage/email SES. Tuần này chưa có API upload tài liệu.
 - Giữ chuỗi schema nền upstream để repository/search/validator làm việc đúng. Không giữ bộ data-upgrade/worker dành cho Medplum cũ. Chỉ hỗ trợ database local mới của dự án, không nâng cấp database Medplum đang vận hành.
