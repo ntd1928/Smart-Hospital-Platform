@@ -417,12 +417,31 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setError(undefined);
     setMessage('');
     try {
-      await client.updateResource({ ...appointment, status: 'cancelled' });
+      const entries: Array<Record<string, unknown>> = [
+        {
+          resource: { ...appointment, status: 'cancelled' },
+          request: {
+            method: 'PUT',
+            url: `Appointment/${appointment.id}`,
+            ifMatch: appointment.meta?.versionId ? `W/"${appointment.meta.versionId}"` : undefined,
+          },
+        },
+      ];
       const slotReference = appointment.slot?.[0]?.reference;
       if (slotReference?.startsWith('Slot/')) {
         const slot = await client.readResource<Slot>('Slot', slotReference.slice('Slot/'.length));
-        if (slot.status === 'busy') await client.updateResource({ ...slot, status: 'free' });
+        if (slot.status === 'busy' && slot.id) {
+          entries.push({
+            resource: { ...slot, status: 'free' },
+            request: {
+              method: 'PUT',
+              url: `Slot/${slot.id}`,
+              ifMatch: slot.meta?.versionId ? `W/"${slot.meta.versionId}"` : undefined,
+            },
+          });
+        }
       }
+      await client.post('fhir/R4', { resourceType: 'Bundle', type: 'transaction', entry: entries });
       setMessage('Đã hủy lịch hẹn.');
       setRefresh((value) => value + 1);
     } catch (e) {
