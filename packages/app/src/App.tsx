@@ -502,6 +502,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   )?.actor?.reference;
                   const patient = patients.find((item) => `Patient/${item.id}` === patientRef);
                   const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerRef);
+                  const canCancel =
+                    ['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
+                    !!appointment.start &&
+                    new Date(appointment.start) > new Date();
                   return (
                     <tr key={appointment.id} data-resource-id={appointment.id}>
                       <td>
@@ -521,7 +525,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                       </td>
                       {staff && (
                         <td>
-                          {appointment.status !== 'cancelled' && (
+                          {canCancel && (
                             <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
                               Hủy
                             </button>

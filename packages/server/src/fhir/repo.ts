@@ -938,6 +938,7 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   async updateResource<T extends Resource>(resource: T, options?: UpdateResourceOptions): Promise<WithId<T>> {
+    await this.ensureAppointmentCancellationAllowed(resource);
     await this.ensureNoAppointmentConflict(resource, resource.resourceType === 'Appointment' ? resource.id : undefined);
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
 
@@ -980,6 +981,24 @@ export class Repository extends FhirRepository implements Disposable {
           },
         ],
       });
+    }
+  }
+
+  private async ensureAppointmentCancellationAllowed(resource: Resource): Promise<void> {
+    if (
+      resource.resourceType !== 'Appointment' ||
+      resource.status !== 'cancelled' ||
+      !resource.id ||
+      !(tryGetRequestContext() instanceof AuthenticatedRequestContext)
+    ) {
+      return;
+    }
+    const current = await this.readResource<Appointment>('Appointment', resource.id);
+    if (current.status === 'cancelled') return;
+    const cancellableStatuses = new Set(['proposed', 'pending', 'booked', 'waitlist']);
+    const start = current.start ? new Date(current.start).getTime() : Number.NaN;
+    if (!cancellableStatuses.has(current.status ?? '') || !Number.isFinite(start) || start <= Date.now()) {
+      throw new OperationOutcomeError(badRequest('Only future scheduled appointments can be cancelled.'));
     }
   }
 
