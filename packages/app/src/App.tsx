@@ -712,6 +712,61 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function deactivateSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const scheduleId = String(new FormData(form).get('scheduleToDeactivate'));
+    if (!scheduleId || !window.confirm('Tắt Schedule và ngừng các Slot còn trống trong tương lai?')) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const [schedule, futureFreeSlots] = await Promise.all([
+        client.readResource<Schedule>('Schedule', scheduleId),
+        client.searchResources('Slot', {
+          schedule: `Schedule/${scheduleId}`,
+          status: 'free',
+          start: `ge${new Date().toISOString()}`,
+          _count: '100',
+        }),
+      ]);
+      if (schedule.active === false) {
+        setError(new Error('Schedule đã được tắt.'));
+        return;
+      }
+      if (futureFreeSlots.length > 99) {
+        setError(new Error('Schedule cần hơn 100 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
+        return;
+      }
+      const entries = [
+        ...futureFreeSlots.filter((slot) => slot.id).map((slot) => ({
+          resource: { ...slot, status: 'busy-unavailable' },
+          request: {
+            method: 'PUT',
+            url: `Slot/${slot.id}`,
+            ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+          },
+        })),
+        {
+          resource: { ...schedule, active: false },
+          request: {
+            method: 'PUT',
+            url: `Schedule/${schedule.id}`,
+            ifMatch: schedule.meta?.versionId ? `W/\"${schedule.meta.versionId}\"` : undefined,
+          },
+        },
+      ];
+      await client.post('fhir/R4', { resourceType: 'Bundle', type: 'transaction', entry: entries });
+      setMessage(`Đã tắt Schedule và ngừng ${futureFreeSlots.length} Slot còn trống trong tương lai.`);
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const availableSlots = findAvailableSlots(slots, schedules, role === 'Doctor' ? doctorProfile?.id : undefined).filter(
@@ -886,6 +941,26 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                 </button>
               </>
             )}
+          </div>
+        </form>
+      )}
+      {staff && schedules.some((schedule) => schedule.active !== false) && (
+        <form className="panel editor" onSubmit={deactivateSchedule}>
+          <h2>Tắt Schedule</h2>
+          <p className="muted">Các Slot còn trống trong tương lai được ngừng cùng lúc; lịch hẹn đã đặt vẫn giữ nguyên.</p>
+          <div className="form-grid">
+            <label>
+              Schedule đang hoạt động
+              <select name="scheduleToDeactivate" required defaultValue="">
+                <option value="" disabled>Chọn Schedule</option>
+                {schedules.filter((schedule) => schedule.active !== false).map((schedule) => (
+                  <option key={schedule.id} value={schedule.id}>{schedule.actor?.map((actor) => actor.display ?? actor.reference).join(', ') || schedule.id}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button" disabled={busy}>{busy ? 'Đang lưu…' : 'Tắt Schedule'}</button>
           </div>
         </form>
       )}
