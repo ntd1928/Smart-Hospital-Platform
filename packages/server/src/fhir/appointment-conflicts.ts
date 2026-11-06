@@ -104,3 +104,28 @@ export async function findActiveAppointmentForSlot(repo: Repository, slotId: str
   });
   return match;
 }
+
+/** Finds an active Appointment overlapping a Slot for any scheduled Practitioner. */
+export async function findAppointmentConflictForSlot(
+  repo: Repository,
+  candidate: Slot,
+  practitionerReferences: string[]
+): Promise<Appointment | undefined> {
+  if (!candidate.start || !candidate.end) return undefined;
+  const start = new Date(candidate.start);
+  const end = new Date(candidate.end);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return undefined;
+
+  for (const actor of Array.from(new Set(practitionerReferences)).sort()) {
+    let conflict: Appointment | undefined;
+    await repo.processAllResources<Appointment>({ resourceType: 'Appointment', actor }, async (appointment) => {
+      if (nonBlockingStatuses.has(appointment.status ?? '') || !appointment.start || !appointment.end) return;
+      const appointmentStart = new Date(appointment.start);
+      const appointmentEnd = new Date(appointment.end);
+      if (!Number.isFinite(appointmentStart.getTime()) || !Number.isFinite(appointmentEnd.getTime())) return;
+      if (appointmentEnd > appointmentStart && start < appointmentEnd && appointmentStart < end) conflict = appointment;
+    });
+    if (conflict) return conflict;
+  }
+  return undefined;
+}
