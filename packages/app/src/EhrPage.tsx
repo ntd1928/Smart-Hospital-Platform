@@ -294,6 +294,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   }
 
   const selectedPatient = patients.find((patient) => patient.id === patientId);
+  const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
+  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
+  const latestObservation = observations
+    .slice()
+    .sort((a, b) => (b.effectiveDateTime ?? '').localeCompare(a.effectiveDateTime ?? ''))[0];
   const query = encounterSearch.trim().toLocaleLowerCase();
   const filteredEncounters = encounters.filter((encounter) => {
     const startDate = encounter.period?.start?.slice(0, 10) ?? '';
@@ -349,6 +354,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {error && <div className="notice error" role="alert">{normalizeErrorString(error)}</div>}
       {message && <div className="notice" role="status">{message}</div>}
       {loading ? <p className="muted">Đang tải hồ sơ…</p> : null}
+      {patientId && <div className="stat-grid">
+        <section className="stat-card"><span>Lần khám</span><strong>{encounters.length}</strong><small>{inProgressEncounterCount} đang diễn ra</small></section>
+        <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
+        <section className="stat-card"><span>Kết quả</span><strong>{observations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
+      </div>}
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createEncounter}>
           <h2>Ghi nhận lần khám</h2>
