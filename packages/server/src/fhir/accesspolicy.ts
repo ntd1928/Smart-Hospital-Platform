@@ -206,7 +206,7 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       };
       if (scopedSearchParameters) {
         scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
-        if (resourceType === 'MedicationStatement') {
+        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest') {
           scopedRule.readonly = true;
           const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
           scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');

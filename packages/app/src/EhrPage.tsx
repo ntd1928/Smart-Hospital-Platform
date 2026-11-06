@@ -710,11 +710,6 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const activeMedicationAllergies = allergies.filter((allergy) =>
       allergy.clinicalStatus?.coding?.[0]?.code === 'active' && allergy.category?.includes('medication')
     );
-    const normalizedMedication = medication.toLocaleLowerCase();
-    const matchingMedicationAllergies = activeMedicationAllergies.filter((allergy) => {
-      const allergen = (allergy.code?.text ?? allergy.code?.coding?.map((coding) => coding.display ?? coding.code).join(' ') ?? '').trim();
-      return allergen.length > 0 && normalizedMedication.includes(allergen.toLocaleLowerCase());
-    });
     if (!patientId || !medication || !dosage || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || (quantity && (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0)) || (repeats && (!Number.isInteger(Number(repeats)) || Number(repeats) < 0))) {
       setError(new Error('Chọn bệnh nhân và nhập thuốc, hướng dẫn dùng cùng số lượng hợp lệ.'));
       return;
@@ -728,7 +723,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('medicationEncounter') ?? '');
-      const request = await client.createResource<MedicationRequest>({
+      const resource: MedicationRequest = {
         resourceType: 'MedicationRequest',
         status: 'active',
         intent: 'order',
@@ -743,16 +738,20 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           route: route ? { text: route } : undefined,
           timing: frequency ? { code: { text: frequency } } : undefined,
         }],
-        note: activeMedicationAllergies.length && allergyReviewAcknowledged ? [{
-          time: new Date().toISOString(),
-          text: `Người kê đơn xác nhận đã rà soát dị ứng thuốc đang hoạt động.${matchingMedicationAllergies.length ? ` Tên thuốc khớp văn bản với tác nhân: ${matchingMedicationAllergies.map((allergy) => allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ').join(', ')}.` : ' Không phát hiện khớp văn bản với tên thuốc; điều này không loại trừ dị ứng hoặc tương tác.'}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }] : undefined,
         dispenseRequest: {
           quantity: quantity ? { value: Number(quantity), unit: quantityUnit || undefined } : undefined,
           numberOfRepeatsAllowed: repeats ? Number(repeats) : undefined,
         },
+      };
+      const result = await client.post<Parameters>('fhir/R4/MedicationRequest/$record', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'resource', resource },
+          { name: 'allergy-reviewed', valueBoolean: allergyReviewAcknowledged },
+        ],
       });
+      const request = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationRequest | undefined;
+      if (!request) throw new Error('Server did not return the MedicationRequest.');
       setMedicationRequests((current) => [request, ...current]);
       setMessage('Đã lưu yêu cầu thuốc.');
       form.reset();
@@ -951,17 +950,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const time = new Date().toISOString();
-      const updated = await client.updateResource<MedicationRequest>({
-        ...request,
-        status,
-        statusReason: { text: reason },
-        note: [...(request.note ?? []), {
-          time,
-          text: `Yêu cầu thuốc chuyển sang trạng thái ${status}: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/MedicationRequest/$update-status', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'request', valueReference: { reference: `MedicationRequest/${request.id}` } },
+          { name: 'status', valueCode: status },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationRequest | undefined;
+      if (!updated) throw new Error('Server did not return the updated MedicationRequest.');
       setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage(status === 'completed' ? 'Đã đánh dấu liệu trình hoàn tất.' : status === 'cancelled' ? 'Đã hủy yêu cầu thuốc.' : 'Đã ngừng yêu cầu thuốc.');
       form.reset();
@@ -982,16 +980,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<MedicationRequest>({
-        ...request,
-        status: 'entered-in-error',
-        statusReason: { text: reason },
-        note: [...(request.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Yêu cầu thuốc được đánh dấu nhập nhầm; dữ liệu kê đơn được giữ để truy vết. Lý do: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/MedicationRequest/$update-status', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'request', valueReference: { reference: `MedicationRequest/${request.id}` } },
+          { name: 'status', valueCode: 'entered-in-error' },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationRequest | undefined;
+      if (!updated) throw new Error('Server did not return the updated MedicationRequest.');
       setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã đánh dấu yêu cầu thuốc nhập nhầm và lưu lý do.');
       form.reset();
@@ -1545,12 +1543,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 ))}
               </select>
             </label>
-            {activeMedicationAllergies.length > 0 && <>
-              <div className="notice full-width" role="status"><strong>Đối chiếu tên thuốc:</strong> tên thuốc sẽ được rà soát với tên tác nhân dị ứng khi lưu. So khớp văn bản không kiểm tra thành phần hoặc thay thế đánh giá lâm sàng.</div>
-              <label className="full-width">
-                <input type="checkbox" name="medicationAllergyReview" required /> Tôi đã trực tiếp rà soát các dị ứng thuốc đang hoạt động và tự quyết định xử trí trước khi kê.
-              </label>
-            </>}
+            <div className="notice full-width" role="status"><strong>Rà soát dị ứng trước khi kê:</strong> máy chủ kiểm tra các AllergyIntolerance thuốc đang hoạt động và lưu kết quả so khớp tên cùng xác nhận của người kê. So khớp văn bản không kiểm tra thành phần, phản ứng chéo hoặc tương tác lâm sàng.</div>
+            <label className="full-width">
+              <input type="checkbox" name="medicationAllergyReview" required /> Tôi đã rà soát danh sách dị ứng và tự quyết định xử trí trước khi kê.
+            </label>
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu yêu cầu thuốc'}</button>
