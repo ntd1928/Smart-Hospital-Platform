@@ -1021,6 +1021,15 @@ export class Repository extends FhirRepository implements Disposable {
     if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
     const slot = resource as Slot;
     const scheduleReference = slot.schedule?.reference;
+    if (slot.id) {
+      const existingSlot = await this.readResource<Slot>('Slot', slot.id);
+      if (
+        existingSlot.schedule?.reference !== scheduleReference &&
+        (await findAppointmentForSlot(this, slot.id))
+      ) {
+        throw new OperationOutcomeError(badRequest('Cannot move a Slot referenced by an active Appointment.'));
+      }
+    }
     if (scheduleReference?.startsWith('Schedule/')) {
       const start = slot.start ? new Date(slot.start).getTime() : Number.NaN;
       const end = slot.end ? new Date(slot.end).getTime() : Number.NaN;
