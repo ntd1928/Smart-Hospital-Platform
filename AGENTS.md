@@ -2,7 +2,7 @@
 
 Read `docs/development/CONTEXT.md`, `CONTRIBUTING.md` and the assigned issue before changing code. Read `docs/architecture/UPSTREAM.md` before modifying extracted Medplum modules. See `docs/development/DOCUMENTATION.md` for public/private boundaries. Do not depend on ignored local notes for required setup or architecture.
 
-Current delivery builds on weeks 5–6 with a staff-facing Appointment booking workflow over the existing FHIR API, repository-level overlap checks, per-Practitioner write locks and cancellation rules for future scheduled appointments. Slot-based availability, patient self-booking, EHR, cloud deployment and an operating AI assistant remain future work.
+Current delivery builds on weeks 5–6 with a staff-facing Appointment booking workflow over the existing FHIR API, repository-level overlap checks, per-Practitioner write locks and cancellation rules for future scheduled appointments. FHIR Schedule/Slot CRUD/search is enabled; slot-based availability, patient self-booking, EHR, cloud deployment and an operating AI assistant remain future work.
 
 Keep Medplum attribution and SPDX headers. Prefer the existing FHIR repository and authentication mechanisms. Never replace backend authorization with menu hiding. Do not add a second user database or authentication stack.
 

@@ -7,10 +7,12 @@ import { authenticateRequest } from '../oauth/middleware';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
-export const WEEK6_RESOURCES = [
+export const SUPPORTED_FHIR_RESOURCES = [
   'Patient',
   'Practitioner',
   'Appointment',
+  'Schedule',
+  'Slot',
   'Organization',
   'User',
   'Project',
@@ -36,7 +38,7 @@ fhirRouter.get('/metadata', (_req, res) =>
     rest: [
       {
         mode: 'server',
-        resource: WEEK6_RESOURCES.map((type) => ({
+        resource: SUPPORTED_FHIR_RESOURCES.map((type) => ({
           type,
           interaction: ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'].map(
             (code) => ({ code })
@@ -51,10 +53,10 @@ const router = new FhirRouter({ introspectionEnabled: true });
 router.add('POST', '/Project/$init', projectInitHandler);
 fhirRouter.use(async (req, res) => {
   const resourceType = req.path.split('/')[1];
-  if (!WEEK6_RESOURCES.includes(resourceType)) {
+  if (!SUPPORTED_FHIR_RESOURCES.includes(resourceType)) {
     res.status(404).json({
       resourceType: 'OperationOutcome',
-      issue: [{ severity: 'error', code: 'not-supported', diagnostics: 'Resource outside weeks 5–6 scope' }],
+      issue: [{ severity: 'error', code: 'not-supported', diagnostics: 'Resource is not enabled for this deployment' }],
     });
     return;
   }

@@ -10,7 +10,7 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 
 ## Điều chỉnh
 
-- App/router chỉ mở auth, invite quản trị và resource tuần 5–6. Không mở AI/Bot, EHR, bulk data, HL7/DICOM, SCIM hoặc workflow đặt khám nâng cao.
+- App/router mở auth, invite quản trị, Patient/Practitioner/Appointment và Schedule/Slot cho nền tảng lịch hẹn. Không mở AI/Bot, EHR, bulk data, HL7/DICOM hoặc SCIM.
 - Repository giữ CRUD, policy, transaction, search, history; bỏ hook Bot pre-commit và background/subscription/WebSocket jobs. Không có worker giả thay thế.
 - Config chỉ giữ file/env; storage nội bộ chỉ filesystem; bỏ cloud config/storage/email SES. Tuần này chưa có API upload tài liệu.
 - Giữ chuỗi schema nền upstream để repository/search/validator làm việc đúng. Không giữ bộ data-upgrade/worker dành cho Medplum cũ. Chỉ hỗ trợ database local mới của dự án, không nâng cấp database Medplum đang vận hành.
