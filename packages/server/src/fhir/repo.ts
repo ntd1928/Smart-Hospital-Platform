@@ -970,6 +970,8 @@ export class Repository extends FhirRepository implements Disposable {
         resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       const authenticatedSlot =
         resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSchedule =
+        resource.resourceType === 'Schedule' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       if (authenticatedAppointment) {
         result = await this.withAppointmentWrite(resource, async (repo) => {
           await repo.ensureAppointmentCancellationAllowed(resource);
@@ -979,6 +981,11 @@ export class Repository extends FhirRepository implements Disposable {
       } else if (authenticatedSlot) {
         result = await this.withSlotWrite(resource, async (repo) => {
           await repo.ensureNoSlotConflict(resource, resource.id);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (authenticatedSchedule) {
+        result = await this.withScheduleWrite(resource, async (repo) => {
+          await repo.ensureScheduleMutationAllowed(resource);
           return repo.updateResourceImpl(resource, false, options);
         });
       } else if (options?.ifMatch) {
@@ -1092,6 +1099,65 @@ export class Repository extends FhirRepository implements Disposable {
         ],
       });
     }
+  }
+
+  private async ensureScheduleMutationAllowed(resource: Resource): Promise<void> {
+    if (
+      resource.resourceType !== 'Schedule' ||
+      !resource.id ||
+      !(tryGetRequestContext() instanceof AuthenticatedRequestContext)
+    ) {
+      return;
+    }
+    const schedule = resource as Schedule;
+    const current = await this.readResource<Schedule>('Schedule', schedule.id);
+    const currentActors = (current.actor ?? []).map((actor) => actor.reference ?? '').sort();
+    const nextActors = (schedule.actor ?? []).map((actor) => actor.reference ?? '').sort();
+    if (current.active === schedule.active && currentActors.join('|') === nextActors.join('|')) return;
+
+    let hasFutureFreeSlot = false;
+    await this.processAllResources<Slot>(
+      {
+        resourceType: 'Slot',
+        schedule: `Schedule/${schedule.id}`,
+        status: 'free',
+        start: `ge${new Date().toISOString()}`,
+      },
+      async () => {
+        hasFutureFreeSlot = true;
+      }
+    );
+    if (hasFutureFreeSlot) {
+      throw new OperationOutcomeError(
+        badRequest('Retire future free Slots before changing the Schedule status or Practitioner actors.')
+      );
+    }
+  }
+
+  private async withScheduleWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      await repo.lockSchedule(resource);
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'Schedule',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.scheduleWrite',
+    });
+  }
+
+  private async lockSchedule(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'Schedule' || !resource.id || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
+      return;
+    }
+    const projectId = this.currentProject()?.id;
+    if (!projectId) return;
+    await this.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${projectId}:Schedule/${resource.id}`],
+      { resourceTypes: 'Schedule', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSchedule' }
+    );
   }
 
   private async withSlotWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
