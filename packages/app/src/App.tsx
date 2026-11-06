@@ -836,7 +836,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form className="panel editor" onSubmit={createRecurringAvailability}>
           <h2>Tạo khung giờ lặp</h2>
-          <p className="muted">Tạo hoặc thay lịch lặp; mỗi transaction tối đa 100 thao tác.</p>
+          <p className="muted">Tạo hoặc thay Slot trống của lịch lặp; Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
