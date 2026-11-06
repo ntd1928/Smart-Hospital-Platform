@@ -180,7 +180,7 @@
     {
       "path": "packages/server/src/fhir/accesspolicy.ts",
       "upstreamSha256": "53a34ba5db9cccb39583ca209c0ebb28a3fd711641c83f656aaef1cc38e0033f",
-      "currentSha256": "96d3d9199f4ddd5f75b353ae2892cb71e9286751a734ff1dfa3cae8e07d069d9",
+      "currentSha256": "c9e971710259478bcc4f64df509219eb205d4a78d1e61c785c7f5c2a38534067",
       "status": "adapted-or-formatted"
     },
     {

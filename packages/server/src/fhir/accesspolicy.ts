@@ -206,7 +206,7 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       };
       if (scopedSearchParameters) {
         scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
-        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest') {
+        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance') {
           scopedRule.readonly = true;
           const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
           scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');
@@ -235,10 +235,10 @@ const patientSelfServiceReadonlyFields = [
 ];
 
 /**
- * Restricts Patient profile edits to contact details on the authenticated Patient resource.
+ * Restricts Patient edits to contact details and keeps medication/allergy history read-only.
  * @param accessPolicy - The populated access policy for the login.
  * @param patientReference - The authenticated Patient reference.
- * @returns An access policy limited to reading/searching and updating the patient's own contact data.
+ * @returns An access policy limited to reading/searching clinical medication/allergy data and updating the patient's contact data.
  */
 function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, patientReference: string): PopulatedAccessPolicy {
   const resourcePolicies: AccessPolicyResource[] = [];
@@ -246,10 +246,15 @@ function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, p
     const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
     for (const resourceType of resourceTypes) {
       if (resourceType !== 'Patient') {
+        const readonlyClinicalResources = ['AllergyIntolerance', 'MedicationRequest', 'MedicationStatement'];
         resourcePolicies.push({
           ...rule,
           resourceType,
           criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
+          ...(readonlyClinicalResources.includes(resourceType) ? { readonly: true } : {}),
+          ...(readonlyClinicalResources.includes(resourceType) && !rule.readonly
+            ? { interaction: (rule.interaction ?? [...readInteractions, 'create', 'update', 'delete']).filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete') }
+            : {}),
         });
         continue;
       }

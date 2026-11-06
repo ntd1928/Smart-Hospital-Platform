@@ -28,6 +28,8 @@ Khi kết thúc Encounter, staff gửi `$complete` với summary lâm sàng bắ
 
 Đối soát thuốc MedicationStatement dùng `$record` và `$update-status`: Doctor chỉ xử lý Patient được gán; server kiểm tra Encounter/MedicationRequest liên kết cùng Patient/project, đóng dấu nguồn và actor xác thực, còn đổi trạng thái cần lý do audit. Practitioner bị chặn CRUD trực tiếp resource này qua AccessPolicy. Kê MedicationRequest cũng chỉ qua operation: bác sĩ xác thực, kiểm tra Patient được gán, Encounter cùng Patient, rà soát AllergyIntolerance medication đang active phía server và lưu kết quả so khớp tên cùng xác nhận của người kê; đổi trạng thái kê đơn bị khóa và ghi lý do audit. Đây không phải đánh giá tương tác/dị ứng lâm sàng tự động.
 
+AllergyIntolerance được staff ghi hoặc review qua `$record`/`$review`; server kiểm tra Patient được phân công, khóa cập nhật, yêu cầu lý do khi xác nhận/bác bỏ hoặc đổi trạng thái, và gắn Practitioner recorder/audit note. Patient và Practitioner không thể ghi trực tiếp allergy/medication history bằng FHIR CRUD; Patient chỉ đọc qua compartment.
+
 GitHub Issues/Projects quản lý công việc, owner, phụ thuộc và tiêu chí nghiệm thu; PR ghi kết quả test và giới hạn. Kiến trúc và cách chạy bắt buộc nằm trong repo, không phụ thuộc tài liệu riêng của một thành viên. Xem [CONTRIBUTING](../../CONTRIBUTING.md) và [phân loại tài liệu](DOCUMENTATION.md).
 
 CI được cấu hình cho pull request và push vào main/develop: quality gate trước, kiểm thử API/E2E trên PostgreSQL/Redis sau. Chưa có CD. Chỉ kết luận CI hosted đạt khi có run tương ứng trên GitHub; chạy local không thay thế bằng chứng đó. Xem [CI](CI.md).

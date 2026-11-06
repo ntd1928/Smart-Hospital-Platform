@@ -19,6 +19,7 @@ import { medicationAdministrationRecordHandler } from './operations/medicationad
 import { encounterCompleteHandler } from './operations/encounters';
 import { medicationStatementRecordHandler, medicationStatementUpdateStatusHandler } from './operations/medicationstatement';
 import { medicationRequestRecordHandler, medicationRequestUpdateStatusHandler } from './operations/medicationrequest';
+import { allergyIntoleranceRecordHandler, allergyIntoleranceReviewHandler } from './operations/allergyintolerance';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
@@ -87,6 +88,8 @@ router.add('POST', '/MedicationStatement/$record', medicationStatementRecordHand
 router.add('POST', '/MedicationStatement/$update-status', medicationStatementUpdateStatusHandler);
 router.add('POST', '/MedicationRequest/$record', medicationRequestRecordHandler);
 router.add('POST', '/MedicationRequest/$update-status', medicationRequestUpdateStatusHandler);
+router.add('POST', '/AllergyIntolerance/$record', allergyIntoleranceRecordHandler);
+router.add('POST', '/AllergyIntolerance/$review', allergyIntoleranceReviewHandler);
 router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);
 router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);

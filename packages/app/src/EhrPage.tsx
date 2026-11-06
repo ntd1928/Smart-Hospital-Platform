@@ -1022,7 +1022,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const allergy = await client.createResource<AllergyIntolerance>({
+      const resource: AllergyIntolerance = {
         resourceType: 'AllergyIntolerance',
         clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'active' }] },
         verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: verificationStatus }] },
@@ -1033,7 +1033,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         onsetDateTime: onsetDate ? new Date(`${onsetDate}T00:00:00`).toISOString() : undefined,
         recordedDate: new Date().toISOString(),
         reaction: reactionText ? [{ manifestation: [{ text: reactionText }], severity: reactionSeverity === 'mild' || reactionSeverity === 'moderate' || reactionSeverity === 'severe' ? reactionSeverity : undefined }] : undefined,
+      };
+      const result = await client.post<Parameters>('fhir/R4/AllergyIntolerance/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource }],
       });
+      const allergy = result.parameter?.find((item) => item.name === 'return')?.resource as AllergyIntolerance | undefined;
+      if (!allergy) throw new Error('Server did not return the AllergyIntolerance.');
       setAllergies((current) => [allergy, ...current]);
       setMessage('Đã ghi nhận dị ứng.');
       form.reset();
@@ -1046,53 +1052,48 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
 
   async function updateAllergyStatus(allergy: AllergyIntolerance, status: 'inactive' | 'resolved') {
     if (!allergy.id || allergy.clinicalStatus?.coding?.[0]?.code !== 'active') return;
-    const time = new Date().toISOString();
-    const statusLabel = status === 'resolved' ? 'đã hết' : 'không còn được xem là đang hoạt động';
-    setSaving(true);
-    setError(undefined);
-    setMessage('');
-    try {
-      const updated = await client.updateResource<AllergyIntolerance>({
-        ...allergy,
-        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: status }] },
-        note: [...(allergy.note ?? []), {
-          time,
-          text: `Trạng thái dị ứng được cập nhật: ${statusLabel}.`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
-      });
-      setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage(status === 'resolved' ? 'Đã đánh dấu dị ứng đã hết.' : 'Đã đánh dấu dị ứng không còn hoạt động.');
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
-    }
+    const reason = window.prompt('Lý do thay đổi trạng thái dị ứng?')?.trim();
+    if (!reason) return;
+    const result = await updateAllergyReview(allergy, status, reason);
+    if (!result) return;
+    setAllergies((current) => current.map((item) => item.id === result.id ? result : item));
+    setMessage(status === 'resolved' ? 'Đã đánh dấu dị ứng đã hết.' : 'Đã đánh dấu dị ứng không còn hoạt động.');
   }
 
   async function reviewAllergyVerification(allergy: AllergyIntolerance, status: 'confirmed' | 'refuted') {
     if (!allergy.id || allergy.verificationStatus?.coding?.[0]?.code !== 'unconfirmed') return;
-    const time = new Date().toISOString();
+    const reason = window.prompt(status === 'confirmed' ? 'Lý do xác nhận dị ứng?' : 'Lý do bác bỏ bản ghi dị ứng?')?.trim();
+    if (!reason) return;
+    const result = await updateAllergyReview(allergy, status, reason);
+    if (!result) return;
+    setAllergies((current) => current.map((item) => item.id === result.id ? result : item));
+    setMessage(status === 'confirmed' ? 'Đã xác nhận dị ứng.' : 'Đã bác bỏ bản ghi dị ứng.');
+  }
+
+  async function updateAllergyReview(
+    allergy: AllergyIntolerance,
+    status: 'confirmed' | 'refuted' | 'inactive' | 'resolved',
+    reason: string
+  ): Promise<AllergyIntolerance | undefined> {
+    if (!allergy.id) return undefined;
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<AllergyIntolerance>({
-        ...allergy,
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: status }] },
-        clinicalStatus: status === 'refuted'
-          ? { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'inactive' }] }
-          : allergy.clinicalStatus,
-        note: [...(allergy.note ?? []), {
-          time,
-          text: status === 'confirmed' ? 'Dị ứng được staff xác nhận sau review.' : 'Dị ứng được staff xác định là không đúng sau review.',
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const response = await client.post<Parameters>('fhir/R4/AllergyIntolerance/$review', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'allergy', valueReference: { reference: `AllergyIntolerance/${allergy.id}` } },
+          { name: 'status', valueCode: status },
+          { name: 'reason', valueString: reason },
+        ],
       });
-      setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage(status === 'confirmed' ? 'Đã xác nhận dị ứng.' : 'Đã bác bỏ bản ghi dị ứng.');
+      const updated = response.parameter?.find((item) => item.name === 'return')?.resource as AllergyIntolerance | undefined;
+      if (!updated) throw new Error('Server did not return the reviewed AllergyIntolerance.');
+      return updated;
     } catch (e) {
       setError(e);
+      return undefined;
     } finally {
       setSaving(false);
     }
