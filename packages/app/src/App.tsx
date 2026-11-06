@@ -1,11 +1,11 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Appointment, Patient, Practitioner, ProjectMembership, ResourceType, User } from '@medplum/fhirtypes';
+import type { Appointment, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
 import { SignInForm, useMedplum, useMedplumProfile } from '@medplum/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
-import { findAppointmentConflict } from './appointment-scheduling';
+import { findAppointmentConflict, findAvailableSlots } from './appointment-scheduling';
 import type { HospitalRole } from './access';
 
 function ErrorMessage({ error }: { error: unknown }) {
@@ -291,6 +291,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [slots, setSlots] = useState<Slot[]>([]);
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -304,16 +306,25 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     if (staff) {
       requests.push(
         client.searchResources('Patient', { _count: '100', _sort: 'name' }),
-        client.searchResources('Practitioner', { _count: '100', _sort: 'name' })
+        client.searchResources('Practitioner', { _count: '100', _sort: 'name' }),
+        client.searchResources('Schedule', { _count: '100' }),
+        client.searchResources('Slot', {
+          status: 'free',
+          start: `ge${new Date().toISOString()}`,
+          _count: '100',
+          _sort: 'start',
+        })
       );
     }
     Promise.all(requests)
-      .then(([appointmentResults, patientResults, practitionerResults]) => {
+      .then(([appointmentResults, patientResults, practitionerResults, scheduleResults, slotResults]) => {
         if (!live) return;
         setAppointments(appointmentResults as Appointment[]);
         if (staff) {
           setPatients(patientResults as Patient[]);
           setPractitioners(practitionerResults as Practitioner[]);
+          setSchedules(scheduleResults as Schedule[]);
+          setSlots(slotResults as Slot[]);
         }
       })
       .catch((e) => {
@@ -328,22 +339,30 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const start = new Date(String(data.get('start')));
-    const end = new Date(String(data.get('end')));
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start <= new Date() || end <= start) {
-      setError(new Error('Chọn thời gian bắt đầu trong tương lai và thời gian kết thúc sau thời gian bắt đầu.'));
+    const selected = availableSlots.find(({ slot }) => slot.id === String(data.get('slot')));
+    if (!selected?.slot.id || !selected.slot.start || !selected.slot.end) {
+      setError(new Error('Chọn một khung giờ còn trống.'));
       return;
     }
+    const slot = selected.slot;
+    const start = new Date(slot.start);
+    const end = new Date(slot.end);
     const patientId = String(data.get('patient'));
-    const practitionerId = role === 'Doctor' ? profile.id : String(data.get('practitioner'));
-    if (!patientId || !practitionerId) {
-      setError(new Error('Cần chọn bệnh nhân và bác sĩ.'));
+    const practitionerId = selected.practitionerReference.split('/')[1];
+    if (!patientId || !practitionerId || start <= new Date() || end <= start) {
+      setError(new Error('Khung giờ, bệnh nhân hoặc bác sĩ không còn hợp lệ.'));
       return;
     }
     setBusy(true);
     setError(undefined);
     setMessage('');
     try {
+      const currentSlot = await client.readResource<Slot>('Slot', slot.id);
+      if (currentSlot.status !== 'free') {
+        setError(new Error('Khung giờ vừa được đặt. Hãy chọn khung giờ khác.'));
+        setRefresh((value) => value + 1);
+        return;
+      }
       const existing = await client.searchResources('Appointment', {
         actor: `Practitioner/${practitionerId}`,
         _count: '1000',
@@ -354,18 +373,29 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         setError(new Error(`Bác sĩ đã có lịch hẹn bắt đầu lúc ${conflictTime}.`));
         return;
       }
-      await client.createResource<Appointment>({
+      const created = await client.createResource<Appointment>({
         resourceType: 'Appointment',
         status: 'booked',
         description: String(data.get('description')).trim() || undefined,
         start: start.toISOString(),
         end: end.toISOString(),
+        slot: [{ reference: `Slot/${slot.id}` }],
         participant: [
           { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
           { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
         ],
       });
-      setMessage('Đã tạo lịch hẹn.');
+      try {
+        await client.updateResource({ ...currentSlot, status: 'busy' });
+      } catch (slotError) {
+        try {
+          if (created.id) await client.deleteResource('Appointment', created.id);
+        } catch {
+          throw new Error(`Lịch đã được tạo nhưng không thể đánh dấu hoặc hoàn tác Slot ${slot.id}.`);
+        }
+        throw slotError;
+      }
+      setMessage('Đã tạo lịch hẹn và đánh dấu khung giờ bận.');
       form.reset();
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -381,6 +411,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setMessage('');
     try {
       await client.updateResource({ ...appointment, status: 'cancelled' });
+      const slotReference = appointment.slot?.[0]?.reference;
+      if (slotReference?.startsWith('Slot/')) {
+        const slot = await client.readResource<Slot>('Slot', slotReference.slice('Slot/'.length));
+        if (slot.status === 'busy') await client.updateResource({ ...slot, status: 'free' });
+      }
       setMessage('Đã hủy lịch hẹn.');
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -390,6 +425,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
 
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
+  const availableSlots = findAvailableSlots(slots, schedules, role === 'Doctor' ? doctorProfile?.id : undefined).filter(
+    ({ practitionerReference }) =>
+      practitioners.some((practitioner) => `Practitioner/${practitioner.id}` === practitionerReference && practitioner.active !== false)
+  );
   return (
     <>
       <PageTitle
@@ -406,9 +445,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form className="panel editor" onSubmit={createAppointment}>
           <h2>Tạo lịch hẹn</h2>
-          <p className="muted">
-            Thời gian được kiểm tra với các lịch hiện có của bác sĩ. Kiểm tra này chưa khóa lịch khi nhiều người đặt cùng lúc.
-          </p>
+          <p className="muted">Chỉ khung giờ FHIR Slot còn trống mới được dùng để đặt lịch.</p>
           <div className="form-grid">
             <label>
               Bệnh nhân
@@ -425,37 +462,25 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   ))}
               </select>
             </label>
-            {role === 'Admin' && (
-              <label>
-                Bác sĩ
-                <select name="practitioner" required defaultValue="">
-                  <option value="" disabled>
-                    Chọn bác sĩ
-                  </option>
-                  {practitioners
-                    .filter((practitioner) => practitioner.active !== false)
-                    .map((practitioner) => (
-                      <option key={practitioner.id} value={practitioner.id}>
-                        {personName(practitioner)}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
-            {role === 'Doctor' && (
-              <label>
-                Bác sĩ
-                <input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled />
-              </label>
-            )}
             <label>
-              Bắt đầu
-              <input name="start" type="datetime-local" min={localDateTimeValue(new Date())} required />
+              Khung giờ trống
+              <select name="slot" required defaultValue="">
+                <option value="" disabled>
+                  Chọn khung giờ
+                </option>
+                {availableSlots.map(({ slot, practitionerReference }) => {
+                  const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                  return (
+                    <option key={slot.id} value={slot.id}>
+                      {new Date(slot.start!).toLocaleString('vi-VN')} – {new Date(slot.end!).toLocaleTimeString('vi-VN')} · {practitioner ? personName(practitioner) : 'Bác sĩ'}
+                    </option>
+                  );
+                })}
+              </select>
             </label>
-            <label>
-              Kết thúc
-              <input name="end" type="datetime-local" required />
-            </label>
+            {availableSlots.length === 0 && (
+              <p className="empty full-width">Chưa có khung giờ trống cho bác sĩ bạn được phép xem.</p>
+            )}
             <label className="full-width">
               Nội dung
               <input name="description" maxLength={200} placeholder="Ví dụ: Tái khám" />
@@ -464,7 +489,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           <div className="form-actions">
             <button
               className="button primary"
-              disabled={busy || patients.length === 0 || (role === 'Admin' && practitioners.length === 0)}
+              disabled={busy || patients.length === 0 || availableSlots.length === 0}
             >
               {busy ? 'Đang lưu…' : 'Tạo lịch hẹn'}
             </button>
@@ -544,11 +569,6 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       </section>
     </>
   );
-}
-
-function localDateTimeValue(date: Date): string {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return localDate.toISOString().slice(0, 16);
 }
 
 function PageTitle({

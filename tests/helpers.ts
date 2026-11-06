@@ -11,6 +11,7 @@ export async function fixture() {
     doctors: { id: string; membershipId: string }[];
     patients: { id: string; identifier: string }[];
     appointments: string[];
+    slots: string[];
     isolatedProjectId: string;
     isolatedPatientId: string;
   };

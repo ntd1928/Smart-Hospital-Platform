@@ -12,11 +12,6 @@ async function login(page: Page, email: string) {
   await expect(page).toHaveURL(/\/dashboard$/);
 }
 
-function localDateTime(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
 test('staff books and cancels an appointment; the patient sees only their own list', async ({ page }) => {
   const data = await fixture();
   const admin = await signIn('admin@hospital.test', data.projectId);
@@ -26,13 +21,7 @@ test('staff books and cancels an appointment; the patient sees only their own li
     await login(page, 'admin@hospital.test');
     await page.getByRole('link', { name: /Lịch hẹn/ }).click();
     await page.getByLabel('Bệnh nhân').selectOption(data.patients[0].id);
-    await page.getByLabel('Bác sĩ').selectOption(data.doctors[0].id);
-
-    const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    start.setMinutes(0, 0, 0);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
-    await page.getByLabel('Bắt đầu').fill(localDateTime(start));
-    await page.getByLabel('Kết thúc').fill(localDateTime(end));
+    await page.getByLabel('Khung giờ trống').selectOption(data.slots[0]);
     await page.getByLabel('Nội dung').fill(description);
     await page.getByRole('button', { name: 'Tạo lịch hẹn' }).click();
 
