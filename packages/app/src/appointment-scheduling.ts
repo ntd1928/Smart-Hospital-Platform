@@ -23,9 +23,14 @@ export interface SlotInterval {
 /** Expands a local time range into dated intervals for selected weekdays. */
 export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInterval[] {
   const { startDate, endDate, startTime, endTime, weekdays } = input;
+  if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) return [];
+  const firstDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const lastDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  const dayCount = Math.floor((lastDate.getTime() - firstDate.getTime()) / 86_400_000) + 1;
+  if (dayCount < 1 || dayCount > 366) return [];
   const startTimeMatch = /^(\d{2}):(\d{2})$/.exec(startTime);
   const endTimeMatch = /^(\d{2}):(\d{2})$/.exec(endTime);
-  if (!startTimeMatch || !endTimeMatch || startDate > endDate || weekdays.length === 0) return [];
+  if (!startTimeMatch || !endTimeMatch || weekdays.length === 0) return [];
 
   const startHour = Number(startTimeMatch[1]);
   const startMinute = Number(startTimeMatch[2]);
@@ -36,8 +41,7 @@ export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInt
   if (selectedWeekdays.size === 0) return [];
 
   const results: SlotInterval[] = [];
-  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-  const lastDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  const cursor = firstDate;
   while (cursor <= lastDate) {
     if (selectedWeekdays.has(cursor.getDay())) {
       const start = new Date(cursor);
