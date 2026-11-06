@@ -20,6 +20,37 @@ export interface SlotInterval {
   end: Date;
 }
 
+/** Expands a local time range into dated intervals for selected weekdays. */
+export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInterval[] {
+  const { startDate, endDate, startTime, endTime, weekdays } = input;
+  const startTimeMatch = /^(\d{2}):(\d{2})$/.exec(startTime);
+  const endTimeMatch = /^(\d{2}):(\d{2})$/.exec(endTime);
+  if (!startTimeMatch || !endTimeMatch || startDate > endDate || weekdays.length === 0) return [];
+
+  const startHour = Number(startTimeMatch[1]);
+  const startMinute = Number(startTimeMatch[2]);
+  const endHour = Number(endTimeMatch[1]);
+  const endMinute = Number(endTimeMatch[2]);
+  if (startHour > 23 || endHour > 23 || startMinute > 59 || endMinute > 59) return [];
+  const selectedWeekdays = new Set(weekdays.filter((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6));
+  if (selectedWeekdays.size === 0) return [];
+
+  const results: SlotInterval[] = [];
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const lastDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  while (cursor <= lastDate) {
+    if (selectedWeekdays.has(cursor.getDay())) {
+      const start = new Date(cursor);
+      start.setHours(startHour, startMinute, 0, 0);
+      const end = new Date(cursor);
+      end.setHours(endHour, endMinute, 0, 0);
+      if (end > start) results.push({ start, end });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return results;
+}
+
 export function findAvailableSlots(slots: Slot[], schedules: Schedule[], practitionerId?: string): AvailableSlot[] {
   const schedulesByReference = new Map(schedules.map((schedule) => [`Schedule/${schedule.id}`, schedule]));
   return slots.flatMap((slot) => {
