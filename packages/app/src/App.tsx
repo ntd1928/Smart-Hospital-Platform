@@ -1020,7 +1020,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   <th>Nội dung</th>
                   <th>Trạng thái</th>
                   <th>Ghi chú</th>
-                  {staff && <th />}
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -1058,13 +1058,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                         <span className="pill">{appointment.status}</span>
                       </td>
                       <td>{appointment.comment || '—'}</td>
-                      {staff && <td>
+                      <td>
                           {canCancel && (
                             <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
-                              Hủy
+                              {patientProfile ? 'Hủy lịch của tôi' : 'Hủy'}
                             </button>
                           )}
-                          {canRecordOutcome && <details>
+                          {staff && canRecordOutcome && <details>
                             <summary>Ghi nhận kết quả</summary>
                             <form className="editor" onSubmit={(event) => void recordAppointmentOutcome(appointment, event)}>
                               <label>Kết quả
@@ -1077,7 +1077,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                               <button className="button" disabled={busy}>Lưu kết quả</button>
                             </form>
                           </details>}
-                        </td>}
+                        </td>
                     </tr>
                   );
                 })}
