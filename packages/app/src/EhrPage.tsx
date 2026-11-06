@@ -387,15 +387,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function stopMedicationRequest(request: MedicationRequest) {
+  async function stopMedicationRequest(request: MedicationRequest, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (!request.id || request.status !== 'active') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('medicationStopReason') ?? '').trim();
+    if (!reason) {
+      setError(new Error('Nhập lý do ngừng yêu cầu thuốc.'));
+      return;
+    }
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<MedicationRequest>({ ...request, status: 'stopped' });
+      const time = new Date().toISOString();
+      const updated = await client.updateResource<MedicationRequest>({
+        ...request,
+        status: 'stopped',
+        statusReason: { text: reason },
+        note: [...(request.note ?? []), {
+          time,
+          text: `Yêu cầu thuốc được ngừng: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
       setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã ngừng yêu cầu thuốc.');
+      form.reset();
     } catch (e) {
       setError(e);
     } finally {
@@ -887,7 +905,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Đơn thuốc</h2>
         {medicationRequests.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lý do ngừng</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{medicationRequests.map((request) => {
             const encounter = encounters.find((item) => request.encounter?.reference === `Encounter/${item.id}`);
             const quantity = request.dispenseRequest?.quantity;
@@ -898,8 +916,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{request.dosageInstruction?.map((instruction) => instruction.text).filter(Boolean).join('; ') || '—'}</td>
                 <td>{quantity ? `${quantity.value ?? ''} ${quantity.unit ?? ''}` : '—'}{request.dispenseRequest?.numberOfRepeatsAllowed !== undefined ? ` · cấp thêm ${request.dispenseRequest.numberOfRepeatsAllowed} lần` : ''}</td>
                 <td>{request.status}</td>
+                <td>{request.statusReason?.text ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : request.encounter?.display ?? request.encounter?.reference ?? '—'}</td>
-                {role !== 'Patient' && <td>{request.status === 'active' && <button className="button" disabled={saving} onClick={() => void stopMedicationRequest(request)}>Ngừng đơn</button>}</td>}
+                {role !== 'Patient' && <td>{request.status === 'active' && <details>
+                  <summary>Ngừng đơn</summary>
+                  <form className="editor" onSubmit={(event) => void stopMedicationRequest(request, event)}>
+                    <label>Lý do<textarea name="medicationStopReason" maxLength={500} rows={3} required /></label>
+                    <button className="button" disabled={saving}>Xác nhận ngừng</button>
+                  </form>
+                </details>}</td>}
               </tr>
             );
           })}</tbody>
