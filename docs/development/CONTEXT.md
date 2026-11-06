@@ -12,7 +12,7 @@ Admin: project-admin Practitioner. Doctor: Practitioner với policy mặc đị
 
 ## Giới hạn
 
-Appointment có API FHIR cơ bản và giao diện đặt/hủy lịch dành cho Admin/Doctor; Patient chỉ xem lịch thuộc compartment cá nhân. Thời gian được nhập thủ công; chưa có Schedule/Slot, kiểm tra trùng lịch, bệnh nhân tự đặt, hay quản lý thay đổi lịch nâng cao. Chưa tích hợp EHR, AI runtime, S3, cloud, CD hay monitoring. FHIR definitions/schema nền vẫn có các kiểu dữ liệu chung để repository/validator hoạt động; có schema không đồng nghĩa module nghiệp vụ đã triển khai.
+Appointment có API FHIR cơ bản và giao diện đặt/hủy lịch dành cho Admin/Doctor; Patient chỉ xem lịch thuộc compartment cá nhân. Form kiểm tra khoảng thời gian với kết quả tìm kiếm Appointment theo bác sĩ, nhưng chưa có Schedule/Slot hoặc khóa giao dịch để ngăn hai lượt đặt đồng thời. Bệnh nhân chưa tự đặt lịch; chưa có quản lý thay đổi lịch nâng cao. Chưa tích hợp EHR, AI runtime, S3, cloud, CD hay monitoring. FHIR definitions/schema nền vẫn có các kiểu dữ liệu chung để repository/validator hoạt động; có schema không đồng nghĩa module nghiệp vụ đã triển khai.
 
 Bản tách dành cho database local mới; không hỗ trợ nâng cấp database Medplum đang vận hành. Các hook Bot, subscription/background job và cloud storage đã được loại khỏi luồng chạy. Redis vẫn là cache và phục vụ auth/session theo upstream.
 

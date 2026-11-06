@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
+import { findAppointmentConflict } from './appointment-scheduling';
 import type { HospitalRole } from './access';
 
 function ErrorMessage({ error }: { error: unknown }) {
@@ -343,6 +344,16 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setError(undefined);
     setMessage('');
     try {
+      const existing = await client.searchResources('Appointment', {
+        actor: `Practitioner/${practitionerId}`,
+        _count: '1000',
+      });
+      const conflict = findAppointmentConflict(existing, practitionerId, start, end);
+      if (conflict) {
+        const conflictTime = conflict.start ? new Date(conflict.start).toLocaleString('vi-VN') : 'không xác định';
+        setError(new Error(`Bác sĩ đã có lịch hẹn bắt đầu lúc ${conflictTime}.`));
+        return;
+      }
       await client.createResource<Appointment>({
         resourceType: 'Appointment',
         status: 'booked',
@@ -396,7 +407,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         <form className="panel editor" onSubmit={createAppointment}>
           <h2>Tạo lịch hẹn</h2>
           <p className="muted">
-            Nhập thời gian thủ công. Chưa có danh sách khung giờ trống hoặc kiểm tra trùng lịch.
+            Thời gian được kiểm tra với các lịch hiện có của bác sĩ. Kiểm tra này chưa khóa lịch khi nhiều người đặt cùng lúc.
           </p>
           <div className="form-grid">
             <label>

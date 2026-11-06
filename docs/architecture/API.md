@@ -19,7 +19,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Appointment                          | CRUD/search cơ bản                            |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 
-Giao diện `/appointments` dùng FHIR API hiện có: Admin chọn Patient và Practitioner; Doctor đặt cho Patient với profile của mình; Patient chỉ xem Appointment được trả về trong compartment cá nhân. Hủy lịch cập nhật trạng thái Appointment thành `cancelled`. Thời gian được nhập thủ công, chưa có Schedule/Slot hoặc kiểm tra trùng lịch.
+Giao diện `/appointments` dùng FHIR API hiện có: Admin chọn Patient và Practitioner; Doctor đặt cho Patient với profile của mình; Patient chỉ xem Appointment được trả về trong compartment cá nhân. Hủy lịch cập nhật trạng thái Appointment thành `cancelled`. Trước khi tạo, form tìm Appointment theo Practitioner và từ chối khoảng thời gian giao nhau với lịch đang hoạt động trong kết quả tìm kiếm. Đây là kiểm tra phía ứng dụng, không khóa giao dịch; chưa có Schedule/Slot hoặc bảo đảm chống đặt đồng thời.
 
 Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng. Chưa mở Encounter/Condition/Observation/Bot hoặc $ai.
 
