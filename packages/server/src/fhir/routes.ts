@@ -8,6 +8,7 @@ import {
   appointmentAvailableHandler,
   appointmentBookHandler,
   appointmentCancelHandler,
+  appointmentRescheduleHandler,
 } from './operations/appointments';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
@@ -66,6 +67,7 @@ router.add('POST', '/Project/$init', projectInitHandler);
 router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
 router.add('POST', '/Appointment/$book', appointmentBookHandler);
 router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
+router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

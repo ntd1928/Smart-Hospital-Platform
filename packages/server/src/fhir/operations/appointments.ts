@@ -14,6 +14,7 @@ import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
 import type { Appointment, Bundle, Practitioner, Reference, Schedule, Slot } from '@medplum/fhirtypes';
 import { getAuthenticatedContext } from '../../context';
 import { findActiveAppointmentForSlot, findAppointmentConflict } from '../appointment-conflicts';
+import type { SystemRepository } from '../repo';
 import { makeOperationDefinition } from './definitions';
 import { buildOutputParameters, makeOperationDefinitionParameter as param, parseInputParameters } from './utils/parameters';
 
@@ -51,6 +52,19 @@ const cancelOperation = makeOperationDefinition(
   }
 );
 
+const rescheduleOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-reschedule',
+    code: 'reschedule',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'slot', 'Reference', 1, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 interface BookParameters {
   slot: Reference;
   description?: string;
@@ -58,6 +72,11 @@ interface BookParameters {
 
 interface CancelParameters {
   appointment: Reference;
+}
+
+interface RescheduleParameters {
+  appointment: Reference;
+  slot: Reference;
 }
 
 /** Returns a bounded list of public availability and minimal provider identity for Patient booking. */
@@ -238,16 +257,91 @@ export async function appointmentCancelHandler(req: FhirRequest): Promise<FhirRe
           ?.map((slot) => /^Slot\/([^/]+)$/.exec(slot.reference ?? '')?.[1])
           .filter((id): id is string => Boolean(id)) ?? []
       );
-      for (const slotId of slotIds) {
-        const slot = await txRepo.readResource<Slot>('Slot', slotId);
-        if (slot.status === 'busy') await txRepo.updateResource({ ...slot, status: 'free' });
-      }
+      for (const slotId of slotIds) await releaseSlotIfSchedulable(txRepo, slotId);
       return updated;
     },
-    { resourceTypes: ['Appointment', 'Slot'], source: 'appointment.patientCancel' }
+    { resourceTypes: ['Appointment', 'Slot', 'Schedule', 'Practitioner'], source: 'appointment.patientCancel' }
   );
 
   return [allOk, buildOutputParameters(cancelOperation, { return: appointment })];
+}
+
+/** Moves the Patient's own future Appointment to a free Slot and releases the old Slot atomically. */
+export async function appointmentRescheduleHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const patientId = getPatientId();
+  const params = parseInputParameters<RescheduleParameters>(rescheduleOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  const newSlotId = /^Slot\/([^/]+)$/.exec(params.slot.reference ?? '')?.[1];
+  if (!appointmentId || !newSlotId) return [badRequest('Appointment and Slot references are required.')];
+
+  const appointment = await ctx.systemRepo.ensureInTransaction(
+    async (txRepo) => {
+      const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+      const belongsToPatient = current.participant?.some(
+        (participant) => participant.actor?.reference === `Patient/${patientId}`
+      );
+      if (!belongsToPatient) throw new OperationOutcomeError(forbidden('Patients may only reschedule their own Appointments.'));
+      if (!['proposed', 'pending', 'booked', 'waitlist'].includes(current.status ?? '')) {
+        throw new OperationOutcomeError(badRequest('Only future scheduled Appointments can be rescheduled.'));
+      }
+      const currentStart = current.start ? new Date(current.start).getTime() : Number.NaN;
+      if (!Number.isFinite(currentStart) || currentStart <= Date.now()) {
+        throw new OperationOutcomeError(badRequest('Only future scheduled Appointments can be rescheduled.'));
+      }
+      const oldSlotIds = current.slot
+        ?.map((slot) => /^Slot\/([^/]+)$/.exec(slot.reference ?? '')?.[1])
+        .filter((id): id is string => Boolean(id)) ?? [];
+      if (oldSlotIds.length !== 1) {
+        throw new OperationOutcomeError(badRequest('Only Appointments linked to one Slot can be rescheduled.'));
+      }
+      if (oldSlotIds[0] === newSlotId) throw new OperationOutcomeError(badRequest('Choose a different Slot.'));
+
+      const newSlot = await txRepo.readResource<Slot>('Slot', newSlotId);
+      if (newSlot.status !== 'free' || !isFutureInterval(newSlot)) {
+        throw new OperationOutcomeError(conflict('The selected Slot is no longer available.'));
+      }
+      const scheduleId = /^Schedule\/([^/]+)$/.exec(newSlot.schedule?.reference ?? '')?.[1];
+      if (!scheduleId) throw new OperationOutcomeError(badRequest('The Slot is not attached to a valid Schedule.'));
+      const schedule = await txRepo.readResource<Schedule>('Schedule', scheduleId);
+      if (schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
+      const practitionerRefs = schedule.actor
+        ?.map((actor) => actor.reference)
+        .filter((reference): reference is string => /^Practitioner\/[^/]+$/.test(reference ?? ''));
+      if (practitionerRefs?.length !== 1) {
+        throw new OperationOutcomeError(badRequest('The Schedule must have exactly one Practitioner.'));
+      }
+      const practitionerId = practitionerRefs[0].slice('Practitioner/'.length);
+      const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
+      if (practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
+      if (await findActiveAppointmentForSlot(txRepo, newSlotId)) {
+        throw new OperationOutcomeError(conflict('An active Appointment already references this Slot.'));
+      }
+
+      const updated: Appointment = {
+        ...current,
+        start: newSlot.start,
+        end: newSlot.end,
+        slot: [{ reference: `Slot/${newSlotId}` }],
+        participant: [
+          ...(current.participant ?? []).filter(
+            (participant) => !participant.actor?.reference?.startsWith('Practitioner/')
+          ),
+          { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
+        ],
+      };
+      const conflictAppointment = await findAppointmentConflict(txRepo, updated, current.id);
+      if (conflictAppointment) throw new OperationOutcomeError(conflict('The Practitioner has an overlapping Appointment.'));
+
+      await txRepo.updateResource({ ...newSlot, status: 'busy' });
+      const saved = await txRepo.updateResource<Appointment>(updated);
+      await releaseSlotIfSchedulable(txRepo, oldSlotIds[0]);
+      return saved;
+    },
+    { resourceTypes: ['Appointment', 'Slot', 'Schedule', 'Practitioner'], source: 'appointment.patientReschedule' }
+  );
+
+  return [allOk, buildOutputParameters(rescheduleOperation, { return: appointment })];
 }
 
 function getPatientId(): string {
@@ -262,6 +356,31 @@ function isFutureInterval(slot: Slot): boolean {
   const start = new Date(slot.start).getTime();
   const end = new Date(slot.end).getTime();
   return Number.isFinite(start) && Number.isFinite(end) && start > Date.now() && end > start;
+}
+
+async function releaseSlotIfSchedulable(repo: SystemRepository, slotId: string): Promise<void> {
+  const slot = await repo.readResource<Slot>('Slot', slotId);
+  if (slot.status !== 'busy') return;
+  const scheduleId = /^Schedule\/([^/]+)$/.exec(slot.schedule?.reference ?? '')?.[1];
+  if (!scheduleId) return;
+  const schedule = await repo.readResource<Schedule>('Schedule', scheduleId).catch((error) => {
+    if (isNotFound(normalizeOperationOutcome(error))) return undefined;
+    throw error;
+  });
+  if (!schedule || schedule.active === false) return;
+  const practitionerIds =
+    schedule.actor
+      ?.map((actor) => /^Practitioner\/([^/]+)$/.exec(actor.reference ?? '')?.[1])
+      .filter((id): id is string => Boolean(id)) ?? [];
+  if (practitionerIds.length === 0) return;
+  for (const practitionerId of practitionerIds) {
+    const practitioner = await repo.readResource<Practitioner>('Practitioner', practitionerId).catch((error) => {
+      if (isNotFound(normalizeOperationOutcome(error))) return undefined;
+      throw error;
+    });
+    if (!practitioner || practitioner.active === false) return;
+  }
+  await repo.updateResource({ ...slot, status: 'free' });
 }
 
 function toPublicPractitioner(practitioner: Practitioner): Practitioner {

@@ -491,6 +491,37 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function rescheduleAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!appointment.id) return;
+    const form = event.currentTarget;
+    const slotId = String(new FormData(form).get('replacementSlot') ?? '');
+    if (!slotId) {
+      setError(new Error('Chọn khung giờ mới.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post('fhir/R4/Appointment/$reschedule', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
+        ],
+      });
+      setMessage('Đã đổi lịch và giải phóng khung giờ cũ.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function bookOwnAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1145,6 +1176,30 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                             <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
                               {patientProfile ? 'Hủy lịch của tôi' : 'Hủy'}
                             </button>
+                          )}
+                          {!staff && canCancel && (
+                            <details>
+                              <summary>Đổi lịch</summary>
+                              <form className="editor" onSubmit={(event) => void rescheduleAppointment(appointment, event)}>
+                                <label>
+                                  Khung giờ mới
+                                  <select name="replacementSlot" required defaultValue="">
+                                    <option value="" disabled>Chọn khung giờ</option>
+                                    {availableSlots.map(({ slot, practitionerReference }) => {
+                                      const provider = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                                      return (
+                                        <option key={slot.id} value={slot.id}>
+                                          {new Date(slot.start!).toLocaleString('vi-VN')} · {provider ? personName(provider) : 'Bác sĩ'}
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                </label>
+                                <button className="button" disabled={busy || availableSlots.length === 0}>
+                                  {busy ? 'Đang đổi…' : 'Xác nhận đổi lịch'}
+                                </button>
+                              </form>
+                            </details>
                           )}
                           {staff && canRecordOutcome && <details>
                             <summary>Ghi nhận kết quả</summary>
