@@ -537,11 +537,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       weekdays: data.getAll('recurringWeekday').map(Number),
     })).filter(({ start }) => start > new Date());
     if (!practitionerId || intervals.length === 0) {
-      setError(new Error('Elige días y un rango futuro válido para crear la disponibilidad.'));
+      setError(new Error('Chọn các ngày và khoảng thời gian tương lai hợp lệ để tạo lịch.'));
       return;
     }
     if (intervals.length > 100) {
-      setError(new Error('La serie supera 100 Slots. Reduce el rango de fechas.'));
+      setError(new Error('Lịch lặp vượt quá 100 Slot. Hãy rút ngắn khoảng ngày.'));
       return;
     }
     setBusy(true);
@@ -570,7 +570,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
       );
       if (availableIntervals.length === 0) {
-        setError(new Error('Todos los horarios generados coinciden con una cita o Slot existente.'));
+        setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
         return;
       }
       await client.post('fhir/R4', {
@@ -587,7 +587,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           request: { method: 'POST', url: 'Slot' },
         })),
       });
-      setMessage(`Se añadieron ${availableIntervals.length} horarios; ${intervals.length - availableIntervals.length} se omitieron por conflicto.`);
+      setMessage(`Đã thêm ${availableIntervals.length} khung giờ; bỏ qua ${intervals.length - availableIntervals.length} khung giờ bị trùng.`);
       form.reset();
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -720,8 +720,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       )}
       {staff && (
         <form className="panel editor" onSubmit={createRecurringAvailability}>
-          <h2>Crear disponibilidad recurrente</h2>
-          <p className="muted">Genera Slots para días seleccionados, hasta 100 horarios por envío.</p>
+          <h2>Tạo khung giờ lặp</h2>
+          <p className="muted">Tạo Slot theo các ngày đã chọn, tối đa 100 khung giờ mỗi lần.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
@@ -736,20 +736,20 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             ) : (
               <label>Bác sĩ<input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled /></label>
             )}
-            <label>Fecha inicial<input name="recurringStartDate" type="date" required /></label>
-            <label>Fecha final<input name="recurringEndDate" type="date" required /></label>
-            <label>Hora de inicio<input name="recurringStartTime" type="time" required /></label>
-            <label>Hora de fin<input name="recurringEndTime" type="time" required /></label>
+            <label>Ngày bắt đầu<input name="recurringStartDate" type="date" required /></label>
+            <label>Ngày kết thúc<input name="recurringEndDate" type="date" required /></label>
+            <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required /></label>
+            <label>Giờ kết thúc<input name="recurringEndTime" type="time" required /></label>
             <fieldset className="full-width">
-              <legend>Días de la semana</legend>
-              {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day, index) => (
+              <legend>Ngày trong tuần</legend>
+              {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map((day, index) => (
                 <label key={day}><input name="recurringWeekday" type="checkbox" value={index} /> {day}</label>
               ))}
             </fieldset>
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
-              {busy ? 'Guardando…' : 'Crear serie'}
+              {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
             </button>
           </div>
         </form>
