@@ -434,6 +434,32 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function updateAllergyStatus(allergy: AllergyIntolerance, status: 'inactive' | 'resolved') {
+    if (!allergy.id || allergy.clinicalStatus?.coding?.[0]?.code !== 'active') return;
+    const time = new Date().toISOString();
+    const statusLabel = status === 'resolved' ? 'đã hết' : 'không còn được xem là đang hoạt động';
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<AllergyIntolerance>({
+        ...allergy,
+        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: status }] },
+        note: [...(allergy.note ?? []), {
+          time,
+          text: `Trạng thái dị ứng được cập nhật: ${statusLabel}.`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(status === 'resolved' ? 'Đã đánh dấu dị ứng đã hết.' : 'Đã đánh dấu dị ứng không còn hoạt động.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
@@ -859,7 +885,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Lịch sử dị ứng</h2>
         {allergies.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Tác nhân</th><th>Nhóm</th><th>Trạng thái</th><th>Xác minh</th><th>Nguy cơ</th><th>Phản ứng</th><th>Khởi phát</th></tr></thead>
+          <thead><tr><th>Tác nhân</th><th>Nhóm</th><th>Trạng thái</th><th>Xác minh</th><th>Nguy cơ</th><th>Phản ứng</th><th>Khởi phát</th><th>Ghi chú trạng thái</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{allergies.map((allergy) => (
             <tr key={allergy.id}>
               <td>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? '—'}</td>
@@ -869,6 +895,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <td>{allergy.criticality ?? '—'}</td>
               <td>{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).join('; ') || '—'}</td>
               <td>{allergy.onsetDateTime ? new Date(allergy.onsetDateTime).toLocaleDateString('vi-VN') : '—'}</td>
+              <td>{allergy.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
+              {role !== 'Patient' && <td>{allergy.clinicalStatus?.coding?.[0]?.code === 'active' && <>
+                <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'resolved')}>Đã hết</button>{' '}
+                <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'inactive')}>Ngừng theo dõi</button>
+              </>}</td>}
             </tr>
           ))}</tbody>
         </table></div> : <p className="empty">Chưa có dị ứng trong phạm vi truy cập.</p>}
