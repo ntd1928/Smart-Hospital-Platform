@@ -68,11 +68,31 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setLoading(true);
     setError(undefined);
     const patientReference = `Patient/${patientId}`;
+    const encounterResultsPromise = (async () => {
+      const results: Encounter[] = [];
+      for await (const page of client.searchResourcePages('Encounter', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
+      return results;
+    })();
+    const conditionResultsPromise = (async () => {
+      const results: Condition[] = [];
+      for await (const page of client.searchResourcePages('Condition', { patient: patientReference, _count: '100', _sort: '-onset-date' })) results.push(...page);
+      return results;
+    })();
+    const observationResultsPromise = (async () => {
+      const results: Observation[] = [];
+      for await (const page of client.searchResourcePages('Observation', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
+      return results;
+    })();
+    const appointmentResultsPromise = (async () => {
+      const results: Appointment[] = [];
+      for await (const page of client.searchResourcePages('Appointment', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
+      return results;
+    })();
     Promise.all([
-      client.searchResources('Encounter', { patient: patientReference, _count: '100', _sort: '-date' }),
-      client.searchResources('Condition', { patient: patientReference, _count: '100', _sort: '-onset-date' }),
-      client.searchResources('Observation', { patient: patientReference, _count: '100', _sort: '-date' }),
-      client.searchResources('Appointment', { patient: patientReference, _count: '100', _sort: '-date' }),
+      encounterResultsPromise,
+      conditionResultsPromise,
+      observationResultsPromise,
+      appointmentResultsPromise,
     ])
       .then(([encounterResults, conditionResults, observationResults, appointmentResults]) => {
         if (!live) return;
@@ -108,7 +128,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const appointmentId = String(data.get('encounterAppointment') ?? '');
-      await client.createResource<Encounter>({
+      const encounter = await client.createResource<Encounter>({
         resourceType: 'Encounter',
         status: 'in-progress',
         class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
@@ -118,20 +138,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         reasonCode: [{ text: reason }],
         note: clinicalNote ? [{ time: new Date().toISOString(), text: clinicalNote }] : undefined,
       });
+      setEncounters((current) => [encounter, ...current]);
       setMessage('Đã tạo lần khám.');
       form.reset();
-      setLoading(true);
-      const updated = await client.searchResources('Encounter', {
-        patient: `Patient/${patientId}`,
-        _count: '100',
-        _sort: '-date',
-      });
-      setEncounters(updated);
     } catch (e) {
       setError(e);
     } finally {
       setSaving(false);
-      setLoading(false);
     }
   }
 
