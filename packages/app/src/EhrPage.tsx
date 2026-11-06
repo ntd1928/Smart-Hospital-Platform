@@ -140,6 +140,41 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createObservation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const code = String(data.get('observationCode')).trim();
+    const value = String(data.get('observationValue')).trim();
+    const effectiveDateTime = String(data.get('observationDateTime') ?? '');
+    if (!patientId || !code || !value || (effectiveDateTime && !Number.isFinite(new Date(effectiveDateTime).getTime()))) {
+      setError(new Error('Chọn bệnh nhân và nhập chỉ số, giá trị hợp lệ.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const encounterId = String(data.get('observationEncounter') ?? '');
+      const observation = await client.createResource<Observation>({
+        resourceType: 'Observation',
+        status: 'final',
+        code: { text: code },
+        subject: { reference: `Patient/${patientId}` },
+        encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
+        valueString: value,
+      });
+      setObservations((current) => [observation, ...current]);
+      setMessage('Đã lưu kết quả.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId);
   return (
     <>
@@ -211,6 +246,31 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>
               {saving ? 'Đang lưu…' : 'Lưu chẩn đoán'}
+            </button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createObservation}>
+          <h2>Ghi kết quả</h2>
+          <div className="form-grid">
+            <label>Chỉ số<input name="observationCode" maxLength={200} required /></label>
+            <label>Giá trị<input name="observationValue" maxLength={200} required /></label>
+            <label>Thời điểm<input name="observationDateTime" type="datetime-local" /></label>
+            <label>Lần khám liên quan
+              <select name="observationEncounter" defaultValue="">
+                <option value="">Không liên kết</option>
+                {encounters.map((encounter) => (
+                  <option key={encounter.id} value={encounter.id}>
+                    {encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : encounter.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>
+              {saving ? 'Đang lưu…' : 'Lưu kết quả'}
             </button>
           </div>
         </form>
