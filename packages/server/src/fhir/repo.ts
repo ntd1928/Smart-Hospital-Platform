@@ -1031,8 +1031,10 @@ export class Repository extends FhirRepository implements Disposable {
     if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
     const slot = resource as Slot;
     const scheduleReference = slot.schedule?.reference;
+    let retiringExistingFreeSlot = false;
     if (slot.id) {
       const existingSlot = await this.readResource<Slot>('Slot', slot.id);
+      retiringExistingFreeSlot = existingSlot.status === 'free' && slot.status === 'busy-unavailable';
       if (
         (existingSlot.schedule?.reference !== scheduleReference ||
           existingSlot.start !== slot.start ||
@@ -1068,7 +1070,7 @@ export class Repository extends FhirRepository implements Disposable {
           throw new OperationOutcomeError(badRequest('Cannot create or update a Slot for an inactive Practitioner.'));
         }
       }
-      if (await findAppointmentConflictForSlot(this, slot, practitionerReferences)) {
+      if (!retiringExistingFreeSlot && (await findAppointmentConflictForSlot(this, slot, practitionerReferences))) {
         throw new OperationOutcomeError({
           resourceType: 'OperationOutcome',
           issue: [
@@ -1087,7 +1089,7 @@ export class Repository extends FhirRepository implements Disposable {
     if (slot.status === 'entered-in-error' && slot.id && (await findActiveAppointmentForSlot(this, slot.id))) {
       throw new OperationOutcomeError(badRequest('Cannot invalidate a Slot referenced by an active Appointment.'));
     }
-    if (await findSlotConflict(this, slot, excludeId)) {
+    if (!retiringExistingFreeSlot && (await findSlotConflict(this, slot, excludeId))) {
       throw new OperationOutcomeError({
         resourceType: 'OperationOutcome',
         issue: [
