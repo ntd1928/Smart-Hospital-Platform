@@ -1,5 +1,5 @@
 import { Operator, createReference } from '@medplum/core';
-import type { Appointment, Patient, Practitioner, Project, ProjectMembership, User } from '@medplum/fhirtypes';
+import type { Appointment, Patient, Practitioner, Project, ProjectMembership, Schedule, Slot, User } from '@medplum/fhirtypes';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { initAppServices, shutdownApp } from '../packages/server/src/app';
@@ -133,6 +133,46 @@ try {
     });
     appointments.push(item);
   }
+  const schedules: Schedule[] = [];
+  for (let i = 0; i < doctors.length; i++) {
+    const key = `SHP-S${i + 1}`;
+    let schedule = await repo.searchOne<Schedule>({
+      resourceType: 'Schedule',
+      filters: [{ code: 'identifier', operator: Operator.EQUALS, value: `urn:smart-hospital:demo|${key}` }],
+    });
+    schedule ??= await repo.createResource<Schedule>({
+      resourceType: 'Schedule',
+      meta: { project: project.id },
+      identifier: [{ system: 'urn:smart-hospital:demo', value: key }],
+      active: true,
+      actor: [createReference(doctors[i].profile as Practitioner)],
+    });
+    schedules.push(schedule);
+  }
+  const slots: Slot[] = [];
+  const slotDate = new Date();
+  slotDate.setUTCDate(slotDate.getUTCDate() + 1);
+  const slotDay = slotDate.toISOString().slice(0, 10);
+  for (let i = 0; i < schedules.length; i++) {
+    for (let j = 0; j < 3; j++) {
+      const key = `SHP-SLOT-${i + 1}-${j + 1}`;
+      let slot = await repo.searchOne<Slot>({
+        resourceType: 'Slot',
+        filters: [{ code: 'identifier', operator: Operator.EQUALS, value: `urn:smart-hospital:demo|${key}` }],
+      });
+      const hour = 2 + j;
+      slot ??= await repo.createResource<Slot>({
+        resourceType: 'Slot',
+        meta: { project: project.id },
+        identifier: [{ system: 'urn:smart-hospital:demo', value: key }],
+        schedule: createReference(schedules[i]),
+        status: 'free',
+        start: `${slotDay}T0${hour}:00:00Z`,
+        end: `${slotDay}T0${hour}:30:00Z`,
+      });
+      slots.push(slot);
+    }
+  }
   const isolatedProject = await ensureProject('Smart Hospital Isolation Test', 'isolation@hospital.test');
   const isolatedRepo = await getProjectSystemRepo(isolatedProject);
   let isolatedPatient = await isolatedRepo.searchOne<Patient>({
@@ -151,6 +191,8 @@ try {
     doctors: doctors.map((d) => ({ id: d.profile.id, membershipId: d.membership.id })),
     patients: patients.map((p) => ({ id: p.id, identifier: p.identifier?.[0]?.value })),
     appointments: appointments.map((a) => a.id),
+    schedules: schedules.map((schedule) => schedule.id),
+    slots: slots.map((slot) => slot.id),
     isolatedProjectId: isolatedProject.id,
     isolatedPatientId: isolatedPatient.id,
   };
@@ -163,6 +205,8 @@ try {
       patients: patients.length,
       doctors: doctors.length,
       appointments: appointments.length,
+      schedules: schedules.length,
+      slots: slots.length,
     })
   );
 } finally {
