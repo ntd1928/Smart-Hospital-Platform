@@ -364,13 +364,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Chẩn đoán</h2>
         {conditions.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Ngày giải quyết</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{conditions.map((condition) => {
             const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
             return (
               <tr key={condition.id}>
                 <td>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'}</td>
                 <td>{condition.clinicalStatus?.coding?.[0]?.code ?? condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
+                <td>{condition.abatementDateTime ? new Date(condition.abatementDateTime).toLocaleDateString('vi-VN') : condition.abatementPeriod?.end ? new Date(condition.abatementPeriod.end).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
                 {role !== 'Patient' && <td>{condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}</td>}
               </tr>
