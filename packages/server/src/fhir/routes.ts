@@ -10,6 +10,7 @@ import {
   appointmentCancelHandler,
   appointmentCheckInHandler,
   appointmentOfferWaitlistHandler,
+  appointmentRecordOutcomeHandler,
   appointmentRescheduleHandler,
   appointmentStartEncounterHandler,
   appointmentWaitlistHandler,
@@ -77,6 +78,7 @@ router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
 router.add('POST', '/Appointment/$book', appointmentBookHandler);
 router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
 router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
+router.add('POST', '/Appointment/$record-outcome', appointmentRecordOutcomeHandler);
 router.add('POST', '/Appointment/$start-encounter', appointmentStartEncounterHandler);
 router.add('POST', '/Encounter/$complete', encounterCompleteHandler);
 router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);

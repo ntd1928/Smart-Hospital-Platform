@@ -652,10 +652,16 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setError(undefined);
     setMessage('');
     try {
-      const timestamp = new Date().toISOString();
-      const actor = profile.id ? `Practitioner/${profile.id}` : 'Nhân viên';
-      const comment = [appointment.comment, `[${timestamp} · ${actor}] ${status}: ${reason}`].filter(Boolean).join('\n');
-      const updated = await client.updateResource<Appointment>({ ...appointment, status, comment });
+      const result = await client.post<Parameters>('fhir/R4/Appointment/$record-outcome', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'status', valueCode: status },
+          { name: 'reason', valueString: reason },
+        ],
+      });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Appointment | undefined;
+      if (!updated) throw new Error('Server did not return the updated Appointment.');
       setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage(status === 'fulfilled' ? 'Đã ghi nhận lịch hẹn hoàn tất.' : 'Đã ghi nhận bệnh nhân không đến.');
       form.reset();

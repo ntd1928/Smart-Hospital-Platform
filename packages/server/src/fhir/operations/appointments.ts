@@ -80,6 +80,20 @@ const checkInOperation = makeOperationDefinition(
   }
 );
 
+const outcomeOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-record-outcome',
+    code: 'record-outcome',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'status', 'code', 1, '1'),
+      param('in', 'reason', 'string', 1, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 const startEncounterOperation = makeOperationDefinition(
   { scope: 'type', resource: 'Appointment' },
   {
@@ -140,6 +154,12 @@ interface RescheduleParameters {
 interface CheckInParameters {
   appointment: Reference;
   note?: string;
+}
+
+interface OutcomeParameters {
+  appointment: Reference;
+  status: 'fulfilled' | 'noshow';
+  reason: string;
 }
 
 interface StartEncounterParameters {
@@ -307,6 +327,59 @@ export async function appointmentCheckInHandler(req: FhirRequest): Promise<FhirR
     { resourceTypes: ['Appointment', 'Practitioner'], source: 'appointment.checkIn' }
   );
   return [allOk, buildOutputParameters(checkInOperation, { return: appointment })];
+}
+
+/** Records an audited appointment outcome for authorized staff under a per-Appointment lock. */
+export async function appointmentRecordOutcomeHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!ctx.membership.admin && !practitionerId) {
+    throw new OperationOutcomeError(forbidden('Only authenticated staff may record an Appointment outcome.'));
+  }
+  const params = parseInputParameters<OutcomeParameters>(outcomeOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  const reason = params.reason.trim();
+  if (!appointmentId) return [badRequest('An Appointment reference is required.')];
+  if (params.status !== 'fulfilled' && params.status !== 'noshow') return [badRequest('Outcome must be fulfilled or noshow.')];
+  if (!reason || reason.length > 500) return [badRequest('Outcome reason is required and must be 500 characters or fewer.')];
+
+  const appointment = await ctx.repo.ensureInTransaction(async (txRepo) => {
+    await txRepo.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${ctx.project.id}:Appointment:outcome:${appointmentId}`],
+      { resourceTypes: ['Appointment'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.recordOutcomeLock' }
+    );
+    const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+    if (current.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Appointment belongs to another project.'));
+    if (!['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(current.status ?? '')) {
+      throw new OperationOutcomeError(conflict('This Appointment already has a terminal outcome.'));
+    }
+    const startsAt = current.start ? new Date(current.start).getTime() : Number.NaN;
+    const endsAt = current.end ? new Date(current.end).getTime() : Number.NaN;
+    if (!Number.isFinite(startsAt) || startsAt > Date.now()) {
+      throw new OperationOutcomeError(conflict('Appointment outcome can only be recorded after its start time.'));
+    }
+    if (params.status === 'noshow' && (!Number.isFinite(endsAt) || endsAt > Date.now())) {
+      throw new OperationOutcomeError(conflict('No-show can only be recorded after the Appointment has ended.'));
+    }
+    if (practitionerId && !ctx.membership.admin) {
+      const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
+      if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false) {
+        throw new OperationOutcomeError(forbidden('Inactive or out-of-project Practitioners cannot record outcomes.'));
+      }
+      if (!(current.participant ?? []).some((participant) => participant.actor?.reference === `Practitioner/${practitionerId}`)) {
+        throw new OperationOutcomeError(forbidden('Only the Practitioner assigned to this Appointment may record its outcome.'));
+      }
+    }
+    const at = new Date().toISOString();
+    const actor = practitionerId ? `Practitioner/${practitionerId}` : 'Project Admin';
+    return txRepo.updateResource<Appointment>({
+      ...current,
+      status: params.status,
+      comment: [current.comment, `[${at} · ${actor}] ${params.status}: ${reason}`].filter(Boolean).join('\n'),
+    }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
+  }, { resourceTypes: ['Appointment', 'Practitioner'], source: 'appointment.recordOutcome' });
+  return [allOk, buildOutputParameters(outcomeOperation, { return: appointment })];
 }
 
 /** Starts an Encounter for an arrived or fulfilled Appointment, avoiding duplicate links. */
