@@ -14,6 +14,7 @@ export const SUPPORTED_FHIR_RESOURCES = [
   'Encounter',
   'Condition',
   'Observation',
+  'MedicationRequest',
   'Schedule',
   'Slot',
   'Organization',
