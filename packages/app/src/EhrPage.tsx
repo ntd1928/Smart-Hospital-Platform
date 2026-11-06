@@ -169,6 +169,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const form = event.currentTarget;
     const data = new FormData(form);
     const code = String(data.get('observationCode')).trim();
+    const category = String(data.get('observationCategory') ?? 'other');
     const numericValue = String(data.get('observationNumericValue') ?? '').trim();
     const textValue = String(data.get('observationTextValue') ?? '').trim();
     const unit = String(data.get('observationUnit') ?? '').trim();
@@ -185,6 +186,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const observation = await client.createResource<Observation>({
         resourceType: 'Observation',
         status: 'final',
+        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category }] }],
         code: { text: code },
         subject: { reference: `Patient/${patientId}` },
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
@@ -281,6 +283,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h2>Ghi kết quả</h2>
           <div className="form-grid">
             <label>Chỉ số<input name="observationCode" maxLength={200} required /></label>
+            <label>Phân loại
+              <select name="observationCategory" defaultValue="other">
+                <option value="vital-signs">Dấu hiệu sinh tồn</option>
+                <option value="laboratory">Xét nghiệm</option>
+                <option value="other">Khác</option>
+              </select>
+            </label>
             <label>Giá trị số<input name="observationNumericValue" type="number" step="any" /></label>
             <label>Đơn vị<input name="observationUnit" maxLength={40} placeholder="mmHg, kg, °C…" /></label>
             <label className="full-width">Giá trị dạng văn bản<input name="observationTextValue" maxLength={200} /></label>
@@ -345,12 +354,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Kết quả</h2>
         {observations.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày</th><th>Chỉ số</th><th>Giá trị</th><th>Lần khám</th></tr></thead>
+          <thead><tr><th>Ngày</th><th>Phân loại</th><th>Chỉ số</th><th>Giá trị</th><th>Lần khám</th></tr></thead>
           <tbody>{observations.map((observation) => {
             const encounter = encounters.find((item) => observation.encounter?.reference === `Encounter/${item.id}`);
             return (
               <tr key={observation.id}>
                 <td>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleString('vi-VN') : '—'}</td>
+                <td>{observation.category?.[0]?.coding?.[0]?.code ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
                 <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
