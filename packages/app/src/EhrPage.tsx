@@ -349,6 +349,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const data = new FormData(form);
     const medication = String(data.get('medicationName') ?? '').trim();
     const dosage = String(data.get('medicationDosage') ?? '').trim();
+    const doseValue = String(data.get('medicationDoseValue') ?? '').trim();
+    const doseUnit = String(data.get('medicationDoseUnit') ?? '').trim();
+    const route = String(data.get('medicationRoute') ?? '').trim();
+    const frequency = String(data.get('medicationFrequency') ?? '').trim();
     const quantity = String(data.get('medicationQuantity') ?? '').trim();
     const quantityUnit = String(data.get('medicationQuantityUnit') ?? '').trim();
     const repeats = String(data.get('medicationRepeats') ?? '').trim();
@@ -356,7 +360,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const activeMedicationAllergies = allergies.filter((allergy) =>
       allergy.clinicalStatus?.coding?.[0]?.code === 'active' && allergy.category?.includes('medication')
     );
-    if (!patientId || !medication || !dosage || (quantity && (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0)) || (repeats && (!Number.isInteger(Number(repeats)) || Number(repeats) < 0))) {
+    if (!patientId || !medication || !dosage || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || (quantity && (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0)) || (repeats && (!Number.isInteger(Number(repeats)) || Number(repeats) < 0))) {
       setError(new Error('Chọn bệnh nhân và nhập thuốc, hướng dẫn dùng cùng số lượng hợp lệ.'));
       return;
     }
@@ -378,7 +382,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         requester: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
         authoredOn: new Date().toISOString(),
-        dosageInstruction: [{ text: dosage }],
+        dosageInstruction: [{
+          text: dosage,
+          doseAndRate: doseValue ? [{ doseQuantity: { value: Number(doseValue), unit: doseUnit } }] : undefined,
+          route: route ? { text: route } : undefined,
+          timing: frequency ? { code: { text: frequency } } : undefined,
+        }],
         note: activeMedicationAllergies.length ? [{
           time: new Date().toISOString(),
           text: 'Người kê đơn xác nhận đã xem xét các dị ứng thuốc đang hoạt động trên hồ sơ.',
@@ -405,11 +414,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const data = new FormData(form);
     const medication = String(data.get('statementMedication') ?? '').trim();
     const dosage = String(data.get('statementDosage') ?? '').trim();
+    const doseValue = String(data.get('statementDoseValue') ?? '').trim();
+    const doseUnit = String(data.get('statementDoseUnit') ?? '').trim();
+    const route = String(data.get('statementRoute') ?? '').trim();
+    const frequency = String(data.get('statementFrequency') ?? '').trim();
     const statusInput = String(data.get('statementStatus') ?? 'active');
     const effectiveDate = String(data.get('statementEffectiveDate') ?? '');
     const reason = String(data.get('statementReason') ?? '').trim();
     const sourceType = String(data.get('statementSource') ?? 'patient');
-    if (!patientId || !medication || !dosage || (effectiveDate && !Number.isFinite(new Date(effectiveDate).getTime()))) {
+    if (!patientId || !medication || !dosage || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || (effectiveDate && !Number.isFinite(new Date(effectiveDate).getTime()))) {
       setError(new Error('Chọn bệnh nhân, thuốc, cách dùng và ngày hợp lệ.'));
       return;
     }
@@ -435,7 +448,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         basedOn: medicationRequestId ? [{ reference: `MedicationRequest/${medicationRequestId}` }] : undefined,
         dateAsserted: new Date().toISOString(),
         effectiveDateTime: effectiveDate ? new Date(`${effectiveDate}T00:00:00`).toISOString() : undefined,
-        dosage: [{ text: dosage }],
+        dosage: [{
+          text: dosage,
+          doseAndRate: doseValue ? [{ doseQuantity: { value: Number(doseValue), unit: doseUnit } }] : undefined,
+          route: route ? { text: route } : undefined,
+          timing: frequency ? { code: { text: frequency } } : undefined,
+        }],
         statusReason: reason ? [{ text: reason }] : undefined,
       });
       setMedicationStatements((current) => [statement, ...current]);
@@ -868,7 +886,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           </div>}
           <div className="form-grid">
             <label>Tên thuốc<input name="medicationName" maxLength={200} required /></label>
-            <label>Cách dùng<input name="medicationDosage" maxLength={500} placeholder="Liều dùng, đường dùng, tần suất" required /></label>
+            <label>Hướng dẫn dùng<input name="medicationDosage" maxLength={500} placeholder="Ghi chú thêm" required /></label>
+            <label>Liều mỗi lần<input name="medicationDoseValue" type="number" min="0.001" step="any" /></label>
+            <label>Đơn vị liều<input name="medicationDoseUnit" maxLength={40} placeholder="mg, viên, ml…" /></label>
+            <label>Đường dùng<input name="medicationRoute" maxLength={100} placeholder="uống, tiêm…" /></label>
+            <label>Tần suất<input name="medicationFrequency" maxLength={100} placeholder="2 lần mỗi ngày" /></label>
             <label>Số lượng<input name="medicationQuantity" type="number" min="0.01" step="any" /></label>
             <label>Đơn vị<input name="medicationQuantityUnit" maxLength={40} placeholder="viên, ml…" /></label>
             <label>Số lần cấp thêm<input name="medicationRepeats" type="number" min="0" step="1" /></label>
@@ -894,7 +916,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h2>Đối soát thuốc đang dùng</h2>
           <div className="form-grid">
             <label>Thuốc<input name="statementMedication" maxLength={200} required /></label>
-            <label>Cách dùng đã khai báo<input name="statementDosage" maxLength={500} required /></label>
+            <label>Hướng dẫn dùng đã khai báo<input name="statementDosage" maxLength={500} placeholder="Ghi chú thêm" required /></label>
+            <label>Liều mỗi lần<input name="statementDoseValue" type="number" min="0.001" step="any" /></label>
+            <label>Đơn vị liều<input name="statementDoseUnit" maxLength={40} placeholder="mg, viên, ml…" /></label>
+            <label>Đường dùng<input name="statementRoute" maxLength={100} placeholder="uống, tiêm…" /></label>
+            <label>Tần suất<input name="statementFrequency" maxLength={100} placeholder="2 lần mỗi ngày" /></label>
             <label>Nguồn thông tin
               <select name="statementSource" defaultValue="patient">
                 <option value="patient">Bệnh nhân báo</option>
@@ -1122,7 +1148,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{statement.dateAsserted ? new Date(statement.dateAsserted).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{sourceLabel}</td>
                 <td>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
-                <td>{statement.dosage?.map((dose) => dose.text).filter(Boolean).join('; ') || '—'}</td>
+                <td>{statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ') || '—'}</td>
                 <td>{statement.status}</td>
                 <td>{statement.statusReason?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join('; ') || '—'}</td>
                 <td>{basedOnRequest?.medicationCodeableConcept?.text ?? basedOnRequest?.medicationCodeableConcept?.coding?.[0]?.display ?? statement.basedOn?.map((reference) => reference.display ?? reference.reference).join(', ') ?? '—'}</td>
@@ -1180,7 +1206,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <tr key={request.id}>
                 <td>{request.authoredOn ? new Date(request.authoredOn).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
-                <td>{request.dosageInstruction?.map((instruction) => instruction.text).filter(Boolean).join('; ') || '—'}</td>
+                <td>{request.dosageInstruction?.map((instruction) => [instruction.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), instruction.route?.text, instruction.timing?.code?.text, instruction.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ') || '—'}</td>
                 <td>{quantity ? `${quantity.value ?? ''} ${quantity.unit ?? ''}` : '—'}{request.dispenseRequest?.numberOfRepeatsAllowed !== undefined ? ` · cấp thêm ${request.dispenseRequest.numberOfRepeatsAllowed} lần` : ''}</td>
                 <td>{request.status}</td>
                 <td>{request.statusReason?.text ?? '—'}</td>
