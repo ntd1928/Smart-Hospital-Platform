@@ -169,10 +169,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const form = event.currentTarget;
     const data = new FormData(form);
     const code = String(data.get('observationCode')).trim();
-    const value = String(data.get('observationValue')).trim();
+    const numericValue = String(data.get('observationNumericValue') ?? '').trim();
+    const textValue = String(data.get('observationTextValue') ?? '').trim();
+    const unit = String(data.get('observationUnit') ?? '').trim();
     const effectiveDateTime = String(data.get('observationDateTime') ?? '');
-    if (!patientId || !code || !value || (effectiveDateTime && !Number.isFinite(new Date(effectiveDateTime).getTime()))) {
-      setError(new Error('Chọn bệnh nhân và nhập chỉ số, giá trị hợp lệ.'));
+    if (!patientId || !code || (!numericValue && !textValue) || (numericValue && !Number.isFinite(Number(numericValue))) || (effectiveDateTime && !Number.isFinite(new Date(effectiveDateTime).getTime()))) {
+      setError(new Error('Chọn bệnh nhân, chỉ số và một giá trị hợp lệ.'));
       return;
     }
     setSaving(true);
@@ -187,7 +189,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         subject: { reference: `Patient/${patientId}` },
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
         effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
-        valueString: value,
+        ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined } } : { valueString: textValue }),
       });
       setObservations((current) => [observation, ...current]);
       setMessage('Đã lưu kết quả.');
@@ -279,7 +281,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h2>Ghi kết quả</h2>
           <div className="form-grid">
             <label>Chỉ số<input name="observationCode" maxLength={200} required /></label>
-            <label>Giá trị<input name="observationValue" maxLength={200} required /></label>
+            <label>Giá trị số<input name="observationNumericValue" type="number" step="any" /></label>
+            <label>Đơn vị<input name="observationUnit" maxLength={40} placeholder="mmHg, kg, °C…" /></label>
+            <label className="full-width">Giá trị dạng văn bản<input name="observationTextValue" maxLength={200} /></label>
             <label>Thời điểm<input name="observationDateTime" type="datetime-local" /></label>
             <label>Lần khám liên quan
               <select name="observationEncounter" defaultValue="">
