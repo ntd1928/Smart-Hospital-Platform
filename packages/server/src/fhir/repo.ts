@@ -63,6 +63,7 @@ import type {
   OperationDefinitionParameter,
   OperationOutcome,
   Parameters,
+  Practitioner,
   Project,
   Reference,
   Resource,
@@ -1053,6 +1054,13 @@ export class Repository extends FhirRepository implements Disposable {
       const practitionerReferences = schedule.actor
         .map((actor) => actor.reference)
         .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false);
+      for (const practitionerReference of practitionerReferences) {
+        const practitionerId = practitionerReference.slice('Practitioner/'.length);
+        const practitioner = await this.readResource<Practitioner>('Practitioner', practitionerId);
+        if (practitioner.active === false) {
+          throw new OperationOutcomeError(badRequest('Cannot create or update a Slot for an inactive Practitioner.'));
+        }
+      }
       if (await findAppointmentConflictForSlot(this, slot, practitionerReferences)) {
         throw new OperationOutcomeError({
           resourceType: 'OperationOutcome',
