@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationAdministration, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationAdministration, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner, Resource } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -1031,6 +1031,87 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   }
 
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord ?? (role === 'Patient' ? profile as Patient : undefined);
+  function exportFhirDocument(): void {
+    if (!selectedPatient?.id || !profile.id || (profile.resourceType !== 'Patient' && profile.resourceType !== 'Practitioner')) {
+      setError(new Error('Cần có hồ sơ bệnh nhân và người lập hồ sơ để xuất FHIR document.'));
+      return;
+    }
+    const resources: Resource[] = [
+      selectedPatient,
+      profile,
+      ...encounters,
+      ...appointments,
+      ...conditions,
+      ...observations,
+      ...allergies,
+      ...medicationRequests,
+      ...medicationStatements,
+      ...medicationAdministrations,
+    ];
+    const uniqueResources = [...new Map(resources.filter((resource) => resource.id).map((resource) => [`${resource.resourceType}/${resource.id}`, resource])).values()];
+    const fullUrlByReference = new Map(uniqueResources.map((resource) => [
+      `${resource.resourceType}/${resource.id}`,
+      `urn:uuid:${crypto.randomUUID()}`,
+    ]));
+    const compositionId = crypto.randomUUID();
+    const compositionFullUrl = `urn:uuid:${crypto.randomUUID()}`;
+    const referenceFor = (resource: Resource): string | undefined => resource.id ? fullUrlByReference.get(`${resource.resourceType}/${resource.id}`) : undefined;
+    const sections = [
+      { title: 'Lần khám', resources: encounters },
+      { title: 'Cuộc hẹn', resources: appointments },
+      { title: 'Chẩn đoán và vấn đề', resources: conditions },
+      { title: 'Dấu hiệu và kết quả', resources: observations },
+      { title: 'Dị ứng', resources: allergies },
+      { title: 'Thuốc', resources: [...medicationRequests, ...medicationStatements, ...medicationAdministrations] },
+    ].map((section) => ({
+      title: section.title,
+      entry: section.resources.map(referenceFor).filter((reference): reference is string => Boolean(reference)).map((reference) => ({ reference })),
+    })).filter((section) => section.entry.length);
+    const rewriteReferences = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(rewriteReferences);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+          key,
+          key === 'reference' && typeof nested === 'string' ? fullUrlByReference.get(nested) ?? nested : rewriteReferences(nested),
+        ]));
+      }
+      return value;
+    };
+    const now = new Date().toISOString();
+    const composition = {
+      resourceType: 'Composition',
+      id: compositionId,
+      status: 'preliminary',
+      type: { coding: [{ system: 'http://loinc.org', code: '34133-9', display: 'Summary of Episode Note' }], text: 'Tóm tắt hồ sơ bệnh án' },
+      subject: { reference: referenceFor(selectedPatient) },
+      date: now,
+      author: [{ reference: referenceFor(profile) }],
+      title: 'Tóm tắt hồ sơ bệnh án (bản nháp)',
+      section: sections,
+    };
+    const bundle = {
+      resourceType: 'Bundle',
+      identifier: { system: 'urn:ietf:rfc:3986', value: `urn:uuid:${crypto.randomUUID()}` },
+      type: 'document',
+      timestamp: now,
+      entry: [
+        { fullUrl: compositionFullUrl, resource: composition },
+        ...uniqueResources.map((resource) => ({
+          fullUrl: fullUrlByReference.get(`${resource.resourceType}/${resource.id}`),
+          resource: rewriteReferences(resource),
+        })),
+      ],
+    };
+    const file = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/fhir+json;charset=utf-8' });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `fhir-summary-${selectedPatient.id}-${now.slice(0, 10)}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setError(undefined);
+    setMessage(`Đã xuất FHIR document preliminary với ${uniqueResources.length} tài nguyên đang có trong hồ sơ tải.`);
+  }
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
   const ehrConsistencyFindings: string[] = [];
@@ -1158,7 +1239,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h1>Hồ sơ bệnh án</h1>
           <p className="muted">Encounter, chẩn đoán và kết quả được đọc từ FHIR API theo quyền truy cập.</p>
         </div>
-        {patientId && selectedPatient && <button className="button" disabled={loading} onClick={() => window.print()}>In tóm tắt hồ sơ</button>}
+        {patientId && selectedPatient && <div className="form-actions">
+          <button className="button" disabled={loading} onClick={() => window.print()}>In tóm tắt hồ sơ</button>
+          <button className="button" disabled={loading} onClick={exportFhirDocument}>Xuất FHIR document</button>
+        </div>}
       </div>
       {patientId && selectedPatient && !loading && <article className="ehr-print-summary" aria-hidden="true">
         <h1>Tóm tắt hồ sơ bệnh án</h1>

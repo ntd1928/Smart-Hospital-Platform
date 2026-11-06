@@ -30,5 +30,7 @@ Credentials demo chỉ phục vụ localhost và runner CI dùng dữ liệu gi�
 
 EHR ghi dấu hiệu sinh tồn thành Observation theo mã LOINC và UCUM; huyết áp dùng component tâm thu/tâm trương. Các Observation trong một lần nhập được gửi bằng FHIR transaction. Staff sửa được thành phần huyết áp hoặc chỉ số khác với status amended và lý do audit; bảng lịch sử hiển thị cả Observation dạng component.
 
+Staff và Patient có thể tải tóm tắt hồ sơ thành FHIR R4 document Bundle với Composition preliminary đứng đầu, LOINC 34133-9 và section liên kết bằng fullUrl tới tài nguyên đã tải theo quyền hiện tại. Bản xuất JSON không tải thêm dữ liệu, không attestation và không thay hồ sơ nguồn.
+
 
 
