@@ -304,6 +304,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [createdRecurringSeriesId, setCreatedRecurringSeriesId] = useState<string>();
   const staff = role !== 'Patient';
 
   useEffect(() => {
@@ -589,8 +590,45 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           request: { method: 'POST', url: 'Slot' },
         })),
       });
+      setCreatedRecurringSeriesId(seriesId);
       setMessage(`Đã thêm ${availableIntervals.length} khung giờ; bỏ qua ${intervals.length - availableIntervals.length} khung giờ bị trùng.`);
       form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelCreatedRecurringSeries() {
+    if (!createdRecurringSeriesId || !window.confirm('Hủy các Slot trống trong tương lai của lịch lặp vừa tạo?')) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const seriesSlots = await client.searchResources('Slot', {
+        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${createdRecurringSeriesId}`,
+        status: 'free',
+        start: `ge${new Date().toISOString()}`,
+        _count: '100',
+      });
+      if (seriesSlots.length > 0) {
+        await client.post('fhir/R4', {
+          resourceType: 'Bundle',
+          type: 'transaction',
+          entry: seriesSlots.filter((slot) => slot.id).map((slot) => ({
+            resource: { ...slot, status: 'busy-unavailable' },
+            request: {
+              method: 'PUT',
+              url: `Slot/${slot.id}`,
+              ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+            },
+          })),
+        });
+      }
+      setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
+      setCreatedRecurringSeriesId(undefined);
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
@@ -753,6 +791,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
               {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
             </button>
+            {createdRecurringSeriesId && (
+              <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
+                Hủy Slot trống của lịch vừa tạo
+              </button>
+            )}
           </div>
         </form>
       )}
