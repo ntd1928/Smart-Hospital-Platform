@@ -62,3 +62,18 @@ export async function findSlotConflict(repo: Repository, candidate: Slot, exclud
   });
   return conflict;
 }
+
+/** Finds an active Appointment that still references the given Slot. */
+export async function findAppointmentForSlot(
+  repo: Repository,
+  slotId: string,
+  excludeAppointmentId?: string
+): Promise<Appointment | undefined> {
+  let match: Appointment | undefined;
+  await repo.processAllResources<Appointment>({ resourceType: 'Appointment', slot: `Slot/${slotId}` }, async (appointment) => {
+    if (appointment.id !== excludeAppointmentId && !nonBlockingStatuses.has(appointment.status ?? '')) {
+      match = appointment;
+    }
+  });
+  return match;
+}
