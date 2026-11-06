@@ -5,7 +5,13 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
-import { findAppointmentConflict, findAvailableSlots } from './appointment-scheduling';
+import {
+  expandRecurringSlotIntervals,
+  findAppointmentConflict,
+  findAvailableSlots,
+  removeIntervalsConflictingWithSlots,
+  removeOverlappingIntervals,
+} from './appointment-scheduling';
 import type { HospitalRole } from './access';
 
 function ErrorMessage({ error }: { error: unknown }) {
@@ -518,6 +524,79 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function createRecurringAvailability(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const practitionerId = role === 'Doctor' ? profile.id : String(data.get('availabilityPractitioner'));
+    const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
+      startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
+      endDate: new Date(`${String(data.get('recurringEndDate'))}T00:00:00`),
+      startTime: String(data.get('recurringStartTime')),
+      endTime: String(data.get('recurringEndTime')),
+      weekdays: data.getAll('recurringWeekday').map(Number),
+    })).filter(({ start }) => start > new Date());
+    if (!practitionerId || intervals.length === 0) {
+      setError(new Error('Elige días y un rango futuro válido para crear la disponibilidad.'));
+      return;
+    }
+    if (intervals.length > 100) {
+      setError(new Error('La serie supera 100 Slots. Reduce el rango de fechas.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const practitionerReference = `Practitioner/${practitionerId}`;
+      const [appointments, practitionerSchedules] = await Promise.all([
+        client.searchResources('Appointment', { actor: practitionerReference, _count: '1000' }),
+        client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
+      ]);
+      let schedule = practitionerSchedules.find((item) => item.active !== false);
+      if (!schedule) {
+        schedule = await client.createResource<Schedule>({
+          resourceType: 'Schedule',
+          identifier: [{ system: 'urn:smart-hospital:availability', value: practitionerId }],
+          active: true,
+          actor: [{ reference: practitionerReference }],
+        });
+      }
+      const existingSlots = await client.searchResources('Slot', {
+        schedule: `Schedule/${schedule.id}`,
+        _count: '1000',
+      });
+      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots).filter(
+        ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
+      );
+      if (availableIntervals.length === 0) {
+        setError(new Error('Todos los horarios generados coinciden con una cita o Slot existente.'));
+        return;
+      }
+      await client.post('fhir/R4', {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: availableIntervals.map(({ start, end }) => ({
+          resource: {
+            resourceType: 'Slot',
+            schedule: { reference: `Schedule/${schedule.id}` },
+            status: 'free',
+            start: start.toISOString(),
+            end: end.toISOString(),
+          },
+          request: { method: 'POST', url: 'Slot' },
+        })),
+      });
+      setMessage(`Se añadieron ${availableIntervals.length} horarios; ${intervals.length - availableIntervals.length} se omitieron por conflicto.`);
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const availableSlots = findAvailableSlots(slots, schedules, role === 'Doctor' ? doctorProfile?.id : undefined).filter(
@@ -635,6 +714,42 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           <div className="form-actions">
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
               {busy ? 'Đang lưu…' : 'Thêm Slot'}
+            </button>
+          </div>
+        </form>
+      )}
+      {staff && (
+        <form className="panel editor" onSubmit={createRecurringAvailability}>
+          <h2>Crear disponibilidad recurrente</h2>
+          <p className="muted">Genera Slots para días seleccionados, hasta 100 horarios por envío.</p>
+          <div className="form-grid">
+            {role === 'Admin' ? (
+              <label>
+                Bác sĩ
+                <select name="availabilityPractitioner" required defaultValue="">
+                  <option value="" disabled>Chọn bác sĩ</option>
+                  {practitioners.filter((practitioner) => practitioner.active !== false).map((practitioner) => (
+                    <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>Bác sĩ<input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled /></label>
+            )}
+            <label>Fecha inicial<input name="recurringStartDate" type="date" required /></label>
+            <label>Fecha final<input name="recurringEndDate" type="date" required /></label>
+            <label>Hora de inicio<input name="recurringStartTime" type="time" required /></label>
+            <label>Hora de fin<input name="recurringEndTime" type="time" required /></label>
+            <fieldset className="full-width">
+              <legend>Días de la semana</legend>
+              {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((day, index) => (
+                <label key={day}><input name="recurringWeekday" type="checkbox" value={index} /> {day}</label>
+              ))}
+            </fieldset>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
+              {busy ? 'Guardando…' : 'Crear serie'}
             </button>
           </div>
         </form>
