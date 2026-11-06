@@ -105,7 +105,7 @@ import {
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
-import { findAppointmentConflict } from './appointment-conflicts';
+import { findAppointmentConflict, getAppointmentPractitionerReferences } from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
@@ -550,7 +550,6 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   async createResource<T extends Resource>(resource: T, options?: CreateResourceOptions): Promise<WithId<T>> {
-    await this.ensureNoAppointmentConflict(resource);
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
     await this.resourceCap()?.created();
 
@@ -577,7 +576,14 @@ export class Repository extends FhirRepository implements Disposable {
     };
     const startTime = Date.now();
     try {
-      const result = await this.updateResourceImpl(resourceWithId, true);
+      const authenticatedAppointment =
+        resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const result = authenticatedAppointment
+        ? await this.withAppointmentWrite(resourceWithId, async (repo) => {
+            await repo.ensureNoAppointmentConflict(resourceWithId);
+            return repo.updateResourceImpl(resourceWithId, true);
+          })
+        : await this.updateResourceImpl(resourceWithId, true);
       const durationMs = Date.now() - startTime;
 
       await this.postCommit(async () => {
@@ -938,14 +944,20 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   async updateResource<T extends Resource>(resource: T, options?: UpdateResourceOptions): Promise<WithId<T>> {
-    await this.ensureAppointmentCancellationAllowed(resource);
-    await this.ensureNoAppointmentConflict(resource, resource.resourceType === 'Appointment' ? resource.id : undefined);
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
 
     const startTime = Date.now();
     try {
       let result: WithId<T>;
-      if (options?.ifMatch) {
+      const authenticatedAppointment =
+        resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      if (authenticatedAppointment) {
+        result = await this.withAppointmentWrite(resource, async (repo) => {
+          await repo.ensureAppointmentCancellationAllowed(resource);
+          await repo.ensureNoAppointmentConflict(resource, resource.id);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (options?.ifMatch) {
         // Conditional update requires transaction
         result = await this.withTransaction((txRepo) => txRepo.updateResourceImpl(resource, false, options), {
           resourceTypes: resource.resourceType,
@@ -999,6 +1011,42 @@ export class Repository extends FhirRepository implements Disposable {
     const start = current.start ? new Date(current.start).getTime() : Number.NaN;
     if (!cancellableStatuses.has(current.status ?? '') || !Number.isFinite(start) || start <= Date.now()) {
       throw new OperationOutcomeError(badRequest('Only future scheduled appointments can be cancelled.'));
+    }
+  }
+
+  private async withAppointmentWrite<TResult>(
+    resource: Resource,
+    callback: (repo: this) => Promise<TResult>
+  ): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      await repo.lockAppointmentPractitioners(resource);
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'Appointment',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.appointmentWrite',
+    });
+  }
+
+  private async lockAppointmentPractitioners(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'Appointment' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
+      return;
+    }
+    const projectId = this.currentProject()?.id;
+    if (!projectId) return;
+    for (const actor of getAppointmentPractitionerReferences(resource)) {
+      await this.executeRawSql(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`${projectId}:${actor}`],
+        {
+          resourceTypes: 'Appointment',
+          operation: 'write',
+          mode: DatabaseMode.WRITER,
+          source: 'repo.lockAppointmentPractitioner',
+        }
+      );
     }
   }
 
@@ -2546,6 +2594,10 @@ export class Repository extends FhirRepository implements Disposable {
     options: TransactionSqlOptions
   ): Promise<TResult> {
     this.assertUsable();
+    const transactionOptions =
+      !options.isolationLevel && !options.serializable && normalizeResourceTypes(options.resourceTypes).has('Appointment')
+        ? { ...options, serializable: true }
+        : options;
     // Resolving up front is what binds the transaction to a shard: BEGIN must be sent to one
     // database, and connectionFor rejects any later statement that resolves elsewhere.
     // Concurrent calls targeting different shards are safe: each gets its own connection, and the
@@ -2561,7 +2613,7 @@ export class Repository extends FhirRepository implements Disposable {
         const txnScopedRepo = this.createTransactionScopedRepo(shardId, txScope);
         return callback(txnScopedRepo);
       },
-      options
+      transactionOptions
     );
   }
 

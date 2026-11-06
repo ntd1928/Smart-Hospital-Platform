@@ -4,6 +4,16 @@ import type { Repository } from './repo';
 
 const nonBlockingStatuses = new Set(['cancelled', 'entered-in-error', 'fulfilled', 'noshow']);
 
+export function getAppointmentPractitionerReferences(candidate: Appointment): string[] {
+  return Array.from(
+    new Set(
+      candidate.participant
+        ?.map((participant) => participant.actor?.reference)
+        .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false)
+    )
+  ).sort();
+}
+
 /** Finds an active Appointment that overlaps the candidate for any assigned Practitioner. */
 export async function findAppointmentConflict(
   repo: Repository,
@@ -15,12 +25,7 @@ export async function findAppointmentConflict(
   const end = new Date(candidate.end);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return undefined;
 
-  const practitionerReferences = new Set(
-    candidate.participant
-      ?.map((participant) => participant.actor?.reference)
-      .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false)
-  );
-  for (const actor of practitionerReferences) {
+  for (const actor of getAppointmentPractitionerReferences(candidate)) {
     let conflict: Appointment | undefined;
     await repo.processAllResources<Appointment>({ resourceType: 'Appointment', actor }, async (existing) => {
       if (existing.id === excludeId || !existing.start || !existing.end) return;
