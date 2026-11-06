@@ -200,6 +200,45 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function updateEncounterDetails(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!encounter.id || encounter.status !== 'in-progress') return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const startDate = String(data.get('encounterStartDate') ?? '');
+    const startTime = String(data.get('encounterStartTime') ?? '');
+    const reason = String(data.get('encounterUpdatedReason') ?? '').trim();
+    const start = new Date(`${startDate}T${startTime}`);
+    if (!reason || !Number.isFinite(start.getTime()) || (encounter.period?.end && start > new Date(encounter.period.end))) {
+      setError(new Error('Nhập lý do và thời gian bắt đầu hợp lệ, không sau thời điểm kết thúc.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const previousStart = encounter.period?.start;
+      const previousReason = encounter.reasonCode?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ') ?? '';
+      const updated = await client.updateResource<Encounter>({
+        ...encounter,
+        period: { ...encounter.period, start: start.toISOString() },
+        reasonCode: [{ text: reason }],
+        note: [...(encounter.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Cập nhật thông tin lần khám: thời gian ${previousStart ? new Date(previousStart).toLocaleString('vi-VN') : 'chưa ghi'} → ${start.toLocaleString('vi-VN')}; lý do ${previousReason || 'chưa ghi'} → ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã cập nhật lần khám và lưu lịch sử thay đổi.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addEncounterNote(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!encounter.id || encounter.status !== 'in-progress') return;
@@ -1091,6 +1130,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   return appointment?.start ? new Date(appointment.start).toLocaleString('vi-VN') : reference.display ?? reference.reference;
                 }).join(', ') || '—'}</td>
                 {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <>
+                  <details>
+                    <summary>Sửa lần khám</summary>
+                    <form className="editor" onSubmit={(event) => void updateEncounterDetails(encounter, event)}>
+                      <label>Ngày bắt đầu<input name="encounterStartDate" type="date" defaultValue={encounter.period?.start?.slice(0, 10) ?? ''} required /></label>
+                      <label>Giờ bắt đầu<input name="encounterStartTime" type="time" defaultValue={encounter.period?.start ? new Date(encounter.period.start).toTimeString().slice(0, 5) : ''} required /></label>
+                      <label>Lý do khám<textarea name="encounterUpdatedReason" maxLength={200} defaultValue={encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ')} required /></label>
+                      <button className="button" disabled={saving}>Lưu chỉnh sửa</button>
+                    </form>
+                  </details>
                   <details>
                     <summary>Bổ sung ghi chú</summary>
                     <form className="editor" onSubmit={(event) => void addEncounterNote(encounter, event)}>
