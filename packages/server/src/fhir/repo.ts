@@ -1088,11 +1088,21 @@ export class Repository extends FhirRepository implements Disposable {
     const projectId = this.currentProject()?.id;
     const scheduleReference = (resource as Slot).schedule?.reference;
     if (!projectId || !scheduleReference) return;
-    await this.executeRawSql(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [`${projectId}:${scheduleReference}`],
-      { resourceTypes: 'Slot', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSlotSchedule' }
-    );
+    const lockKeys = new Set([`${projectId}:${scheduleReference}`]);
+    const scheduleMatch = /^Schedule\/([^/]+)$/.exec(scheduleReference);
+    if (scheduleMatch) {
+      const schedule = await this.readResource<Schedule>('Schedule', scheduleMatch[1]);
+      for (const actor of schedule.actor ?? []) {
+        if (actor.reference?.startsWith('Practitioner/')) lockKeys.add(`${projectId}:${actor.reference}`);
+      }
+    }
+    for (const lockKey of Array.from(lockKeys).sort()) {
+      await this.executeRawSql(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [lockKey],
+        { resourceTypes: 'Slot', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSlotSchedule' }
+      );
+    }
   }
 
   private async ensureAppointmentCancellationAllowed(resource: Resource): Promise<void> {
