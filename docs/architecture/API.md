@@ -20,6 +20,8 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 
+POST `/fhir/R4` nhận FHIR transaction Bundle nếu mọi entry thuộc resource type được bật trong router; các thao tác trong Bundle chạy qua repository và access policy hiện có.
+
 Giao diện `/appointments` dùng FHIR API hiện có: Admin chọn Patient và Slot; Doctor chọn Patient và Slot gắn với profile của mình; Patient chỉ xem Appointment được trả về trong compartment cá nhân. Repository từ chối create/update có khoảng thời gian giao nhau, khóa theo project và Practitioner trong transaction, và chỉ cho chuyển sang `cancelled` lịch tương lai đang ở trạng thái `proposed`, `pending`, `booked` hoặc `waitlist`. Booking đánh dấu Slot `busy`; hủy lịch đặt lại Slot `free`. Slot và Appointment được ghi bằng request riêng, chưa dùng FHIR transaction; nếu cập nhật Slot lỗi, giao diện thử xóa Appointment vừa tạo.
 
 Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng. Chưa mở Encounter/Condition/Observation/Bot hoặc $ai.
