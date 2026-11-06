@@ -1034,6 +1034,9 @@ export class Repository extends FhirRepository implements Disposable {
       if (schedule.active === false) {
         throw new OperationOutcomeError(badRequest('Cannot create or update a Slot in an inactive Schedule.'));
       }
+      if (!schedule.actor?.some((actor) => actor.reference?.startsWith('Practitioner/'))) {
+        throw new OperationOutcomeError(badRequest('Schedule must reference a Practitioner before it can contain Slots.'));
+      }
     }
     if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
       throw new OperationOutcomeError(badRequest('Cannot mark a Slot free while an active Appointment references it.'));
