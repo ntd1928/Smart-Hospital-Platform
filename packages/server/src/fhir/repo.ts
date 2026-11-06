@@ -1066,7 +1066,7 @@ export class Repository extends FhirRepository implements Disposable {
       for (const practitionerReference of practitionerReferences) {
         const practitionerId = practitionerReference.slice('Practitioner/'.length);
         const practitioner = await this.readResource<Practitioner>('Practitioner', practitionerId);
-        if (practitioner.active === false) {
+        if (practitioner.active === false && !retiringExistingFreeSlot) {
           throw new OperationOutcomeError(badRequest('Cannot create or update a Slot for an inactive Practitioner.'));
         }
       }
