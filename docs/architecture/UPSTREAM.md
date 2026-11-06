@@ -10,11 +10,21 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 
 ## Điều chỉnh
 
-- App/router mở auth, invite quản trị, Patient/Practitioner, Appointment/Schedule/Slot và API Encounter/Condition/Observation; app có trang EHR cơ bản cho ghi/đọc resource. Chưa có đầy đủ vòng đời EHR. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
+- App/router mở auth, invite quản trị, Patient/Practitioner, Organization/HealthcareService/PractitionerRole, Appointment/Schedule/Slot và API Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance; app có danh mục Khoa/Dịch vụ, phân công bác sĩ qua PractitionerRole, quản lý membership và trang EHR cơ bản cho ghi/đọc resource. Cập nhật ProjectMembership được tuần tự hóa để không thể hạ quyền/ngừng Admin cuối cùng. Chưa có đầy đủ vòng đời EHR hoặc kiểm tra tương tác thuốc-dị ứng. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
 - Repository giữ CRUD, policy, transaction, search, history; bỏ hook Bot pre-commit và background/subscription/WebSocket jobs. Không có worker giả thay thế.
 - Config chỉ giữ file/env; storage nội bộ chỉ filesystem; bỏ cloud config/storage/email SES. Tuần này chưa có API upload tài liệu.
 - Giữ chuỗi schema nền upstream để repository/search/validator làm việc đúng. Không giữ bộ data-upgrade/worker dành cho Medplum cũ. Chỉ hỗ trợ database local mới của dự án, không nâng cấp database Medplum đang vận hành.
-- Definitions, bảng schema và kiểu dùng chung còn có resource của các tuần sau. API whitelist mở Encounter/Condition/Observation và app có giao diện EHR cơ bản; liên kết Encounter với Appointment đã khám, upload tài liệu và các workflow lâm sàng đầy đủ chưa triển khai.
+- Definitions, bảng schema và kiểu dùng chung còn có resource của các tuần sau. API whitelist mở Organization/HealthcareService và Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance và app có danh mục khoa cùng giao diện EHR cơ bản; form Encounter hỗ trợ tham chiếu Appointment đã hoàn tất; kiểm tra tương tác thuốc-dị ứng, tính nhất quán, upload tài liệu và các workflow lâm sàng đầy đủ chưa triển khai.
 - Lint tập trung code nhóm; code kế thừa được typecheck/build và kiểm thử tích hợp. Format có thể làm hash khác bản gốc dù logic giữ nguyên.
+
+- Form EHR ghi dấu hiệu sinh tồn bằng Observation LOINC/UCUM; huyết áp giữ hai component tâm thu/tâm trương trong một resource. Một lượt ghi gửi tất cả Observation trong FHIR transaction; UI hỗ trợ đọc và sửa component huyết áp.
+- Policy backend thu hẹp dữ liệu Patient/clinical cho Practitioner theo Patient.generalPractitioner; Admin quản lý phân công trong Patient editor. Chỉ dùng AccessPolicy đã có, không thay authorization bằng ẩn menu.
+- Patient tự cập nhật contact details qua policy FHIR; repository khôi phục read-only fields theo hiện hữu, kể cả giá trị falsy.
+- Appointment check-in được nối tới Encounter: staff bắt đầu Encounter từ lịch arrived/fulfilled qua transaction server-side có kiểm tra Practitioner được gán và chống tạo trùng.
+- Encounter completion dùng operation server-side có khóa theo Encounter, kiểm tra Practitioner được phân công/tham gia hoặc Admin, yêu cầu summary lâm sàng và ghi actor/thời điểm kết thúc cùng transaction.
+- Appointment outcome (fulfilled/noshow) dùng operation server-side có khóa theo Appointment, kiểm tra actor, project, trạng thái và thời gian trước khi ghi kết quả/lý do audit.
+- MedicationStatement CRUD của Practitioner được chuyển sang operation server-side để kiểm tra Patient được gán, tính nhất quán Encounter/MedicationRequest và actor audit; policy chặn ghi trực tiếp.
+- MedicationRequest kê đơn và cập nhật vòng đời chuyển sang operation server-side có assignment/Encounter validation, rà soát AllergyIntolerance medication đang active, xác nhận người kê và audit; policy chặn Practitioner ghi trực tiếp.
+- AllergyIntolerance create/review chuyển sang operation server-side có assignment check, lock và audit reason; policy chặn Practitioner ghi trực tiếp.
 
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

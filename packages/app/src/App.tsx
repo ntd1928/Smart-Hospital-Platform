@@ -1,11 +1,12 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Appointment, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, HealthcareService, Parameters, Patient, Practitioner, PractitionerRole, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
 import { SignInForm, useMedplum, useMedplumProfile } from '@medplum/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
 import { EhrPage } from './EhrPage';
+import { DepartmentsPage } from './DepartmentsPage';
 import {
   expandRecurringSlotIntervals,
   findAppointmentConflict,
@@ -112,6 +113,7 @@ export function App() {
           <NavLink to="/appointments">◷ Lịch hẹn</NavLink>
           <NavLink to="/records">▤ Bệnh án</NavLink>
           {role === 'Admin' && <NavLink to="/users">▤ Người dùng</NavLink>}
+          {role === 'Admin' && <NavLink to="/departments">⌂ Khoa & dịch vụ</NavLink>}
         </nav>
         <div className="sidebar-bottom">
           <span className="status-dot" /> Local environment<small>Powered by Medplum · FHIR R4</small>
@@ -152,13 +154,13 @@ export function App() {
             <Route path="/doctors" element={role !== 'Patient' ? <PeopleList type="Practitioner" /> : <Forbidden />} />
             <Route
               path="/patients/new"
-              element={role !== 'Patient' ? <PersonEditor type="Patient" /> : <Forbidden />}
+              element={role === 'Admin' ? <PersonEditor type="Patient" /> : <Forbidden />}
             />
             <Route
               path="/doctors/new"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
             />
-            <Route path="/patients/:id/edit" element={<PersonEditor type="Patient" />} />
+            <Route path="/patients/:id/edit" element={<PatientEditorRoute role={role} profile={profile as Patient | Practitioner} />} />
             <Route
               path="/doctors/:id/edit"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
@@ -169,6 +171,7 @@ export function App() {
               element={role !== 'Patient' ? <PersonDetails type="Practitioner" /> : <Forbidden />}
             />
             <Route path="/users" element={role === 'Admin' ? <Users /> : <Forbidden />} />
+            <Route path="/departments" element={role === 'Admin' ? <DepartmentsPage /> : <Forbidden />} />
             <Route path="/signin" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
@@ -298,9 +301,14 @@ function Dashboard({ role }: { role: HospitalRole }) {
 
 function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }) {
   const client = useMedplum();
+  const navigate = useNavigate();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const [patientServices, setPatientServices] = useState<HealthcareService[]>([]);
+  const [hospitalServices, setHospitalServices] = useState<HealthcareService[]>([]);
+  const [practitionerRoles, setPractitionerRoles] = useState<PractitionerRole[]>([]);
+  const [selectedPatientService, setSelectedPatientService] = useState('');
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [error, setError] = useState<unknown>();
@@ -322,6 +330,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   });
   const [selectedRecurringSeriesId, setSelectedRecurringSeriesId] = useState<string>();
+  const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
+  const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const staff = role !== 'Patient';
 
   useEffect(() => {
@@ -338,11 +348,20 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           start: `ge${new Date().toISOString()}`,
           _count: '100',
           _sort: 'start',
-        })
+        }),
+        client.searchResources('HealthcareService', { _count: '100' }),
+        client.searchResources('PractitionerRole', { _count: '1000' })
       );
+    } else {
+      requests.push(client.post('fhir/R4/Appointment/$available', {
+        resourceType: 'Parameters',
+        parameter: selectedPatientService
+          ? [{ name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } }]
+          : [],
+      }));
     }
     Promise.all(requests)
-      .then(([appointmentResults, patientResults, practitionerResults, scheduleResults, slotResults]) => {
+      .then(([appointmentResults, patientResults, practitionerResults, scheduleResults, slotResults, serviceResults, practitionerRoleResults]) => {
         if (!live) return;
         setAppointments(appointmentResults as Appointment[]);
         if (staff) {
@@ -350,6 +369,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           setPractitioners(practitionerResults as Practitioner[]);
           setSchedules(scheduleResults as Schedule[]);
           setSlots(slotResults as Slot[]);
+          setHospitalServices(serviceResults as HealthcareService[]);
+          setPractitionerRoles(practitionerRoleResults as PractitionerRole[]);
+        } else {
+          const availability = patientResults as Bundle | undefined;
+          const resources = availability?.entry?.flatMap((entry) => (entry.resource ? [entry.resource] : [])) ?? [];
+          setSlots(resources.filter((resource): resource is Slot => resource.resourceType === 'Slot'));
+          setSchedules(resources.filter((resource): resource is Schedule => resource.resourceType === 'Schedule'));
+          setPractitioners(resources.filter((resource): resource is Practitioner => resource.resourceType === 'Practitioner'));
+          setPatientServices(resources.filter((resource): resource is HealthcareService => resource.resourceType === 'HealthcareService'));
         }
       })
       .catch((e) => {
@@ -358,7 +386,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     return () => {
       live = false;
     };
-  }, [client, staff, refresh]);
+  }, [client, staff, refresh, selectedPatientService]);
 
   async function createAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -442,6 +470,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setError(undefined);
     setMessage('');
     try {
+      if (!staff) {
+        await client.post('fhir/R4/Appointment/$cancel', {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } }],
+        });
+        setMessage('Đã hủy lịch hẹn và giải phóng khung giờ.');
+        setRefresh((value) => value + 1);
+        return;
+      }
       const entries: Array<Record<string, unknown>> = [
         {
           resource: { ...appointment, status: 'cancelled' },
@@ -471,6 +508,212 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
+    }
+  }
+
+  async function rescheduleAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!appointment.id) return;
+    const form = event.currentTarget;
+    const slotId = String(new FormData(form).get('replacementSlot') ?? '');
+    if (!slotId) {
+      setError(new Error('Chọn khung giờ mới.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post('fhir/R4/Appointment/$reschedule', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
+        ],
+      });
+      setMessage('Đã đổi lịch và giải phóng khung giờ cũ.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bookOwnAppointment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const slotId = String(data.get('patientSlot') ?? '');
+    if (!slotId) {
+      setError(new Error('Chọn một khung giờ còn trống.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
+      ];
+      if (selectedPatientService) {
+        parameter.push({ name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } });
+      }
+      const description = String(data.get('patientAppointmentDescription') ?? '').trim();
+      if (description) parameter.push({ name: 'description', valueString: description });
+      await client.post('fhir/R4/Appointment/$book', {
+        resourceType: 'Parameters',
+        parameter,
+      });
+      setMessage('Đã đặt lịch hẹn. Khung giờ được giữ trong cùng một giao dịch.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function joinWaitlist(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!patientProfile || !selectedPatientService) {
+      setError(new Error('Chọn dịch vụ khám trước khi đăng ký danh sách chờ.'));
+      return;
+    }
+    const form = event.currentTarget;
+    const description = String(new FormData(form).get('waitlistDescription') ?? '').trim();
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } },
+      ];
+      if (description) parameter.push({ name: 'description', valueString: description });
+      await client.post('fhir/R4/Appointment/$waitlist', { resourceType: 'Parameters', parameter });
+      setMessage('Đã ghi nhận yêu cầu chờ cho dịch vụ. Nếu bạn đã có yêu cầu đang chờ cùng dịch vụ, yêu cầu cũ được giữ nguyên.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function offerWaitlistAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!appointment.id) return;
+    const form = event.currentTarget;
+    const slotId = String(new FormData(form).get('waitlistSlot') ?? '');
+    if (!slotId) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post('fhir/R4/Appointment/$offer-waitlist', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
+        ],
+      });
+      setMessage('Đã ghép yêu cầu chờ với Slot; Appointment và lịch trống được cập nhật cùng transaction.');
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordAppointmentOutcome(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!staff || !appointment.id || !appointment.start || new Date(appointment.start) > new Date()) return;
+    if (!['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(appointment.status ?? '')) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const status = String(data.get('appointmentOutcome'));
+    const reason = String(data.get('appointmentOutcomeReason') ?? '').trim();
+    if ((status !== 'fulfilled' && status !== 'noshow') || !reason) {
+      setError(new Error('Chọn kết quả hợp lệ và nhập lý do ghi nhận.'));
+      return;
+    }
+    if (status === 'noshow' && appointment.end && new Date(appointment.end) > new Date()) {
+      setError(new Error('Chỉ ghi nhận không đến sau khi khung giờ hẹn đã kết thúc.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const result = await client.post<Parameters>('fhir/R4/Appointment/$record-outcome', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'status', valueCode: status },
+          { name: 'reason', valueString: reason },
+        ],
+      });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Appointment | undefined;
+      if (!updated) throw new Error('Server did not return the updated Appointment.');
+      setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(status === 'fulfilled' ? 'Đã ghi nhận lịch hẹn hoàn tất.' : 'Đã ghi nhận bệnh nhân không đến.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkInAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!staff || !appointment.id) return;
+    const form = event.currentTarget;
+    const note = String(new FormData(form).get('checkInNote') ?? '').trim();
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+      ];
+      if (note) parameter.push({ name: 'note', valueString: note });
+      await client.post('fhir/R4/Appointment/$check-in', { resourceType: 'Parameters', parameter });
+      setMessage('Đã check-in bệnh nhân; trạng thái lịch chuyển sang arrived.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startEncounter(appointment: Appointment, patientReference: string | undefined) {
+    if (!appointment.id || !patientReference) return;
+    const patientId = /^Patient\/([^/]+)$/.exec(patientReference)?.[1];
+    if (!patientId) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post<Parameters>('fhir/R4/Appointment/$start-encounter', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } }],
+      });
+      navigate(`/records?patient=${encodeURIComponent(patientId)}`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -770,12 +1013,20 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
-  const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
-  const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const availableSlots = findAvailableSlots(slots, schedules, role === 'Doctor' ? doctorProfile?.id : undefined).filter(
     ({ practitionerReference }) =>
       practitioners.some((practitioner) => `Practitioner/${practitioner.id}` === practitionerReference && practitioner.active !== false)
   );
+  const displayedAppointments = staff
+    ? [...appointments].sort((left, right) => {
+        const leftWaiting = left.status === 'waitlist' && !left.start;
+        const rightWaiting = right.status === 'waitlist' && !right.start;
+        if (leftWaiting !== rightWaiting) return leftWaiting ? -1 : 1;
+        const leftTime = leftWaiting ? left.meta?.lastUpdated : left.start;
+        const rightTime = rightWaiting ? right.meta?.lastUpdated : right.start;
+        return new Date(leftTime ?? 0).getTime() - new Date(rightTime ?? 0).getTime();
+      })
+    : appointments;
   return (
     <>
       <PageTitle
@@ -788,6 +1039,67 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         <div className="notice" role="status">
           {message}
         </div>
+      )}
+      {!staff && (
+        <form className="panel editor" onSubmit={bookOwnAppointment}>
+          <h2>Đặt lịch khám</h2>
+          <p className="muted">Chọn một khung giờ còn trống trong 90 ngày tới. Bác sĩ và thời gian được xác nhận lại khi đặt.</p>
+          <div className="form-grid">
+            <label>
+              Dịch vụ khám
+              <select value={selectedPatientService} onChange={(event) => {
+                setSlots([]);
+                setSelectedPatientService(event.target.value);
+              }}>
+                <option value="">Tất cả dịch vụ</option>
+                {patientServices.map((service) => <option key={service.id} value={service.id}>{service.name ?? service.id}</option>)}
+              </select>
+            </label>
+            <label>
+              Khung giờ trống
+              <select name="patientSlot" required defaultValue="">
+                <option value="" disabled>Chọn khung giờ</option>
+                {availableSlots.map(({ slot, practitionerReference }) => {
+                  const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                  return (
+                    <option key={slot.id} value={slot.id}>
+                      {new Date(slot.start!).toLocaleString('vi-VN')} – {new Date(slot.end!).toLocaleTimeString('vi-VN')} · {practitioner ? personName(practitioner) : 'Bác sĩ'}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label>
+              Nội dung
+              <input name="patientAppointmentDescription" maxLength={200} placeholder="Ví dụ: Tái khám" />
+            </label>
+            {availableSlots.length === 0 && (
+              <p className="empty full-width">
+                {selectedPatientService
+                  ? 'Dịch vụ này chưa có khung giờ trống trong 90 ngày tới.'
+                  : 'Chưa có khung giờ trống trong 90 ngày tới.'}
+              </p>
+            )}
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy || availableSlots.length === 0}>
+              {busy ? 'Đang đặt…' : 'Đặt lịch'}
+            </button>
+          </div>
+        </form>
+      )}
+      {!staff && selectedPatientService && availableSlots.length === 0 && (
+        <form className="panel editor" onSubmit={joinWaitlist}>
+          <h2>Đăng ký danh sách chờ</h2>
+          <p className="muted">Đăng ký cho dịch vụ đã chọn. Nhân viên sẽ liên hệ khi có lịch phù hợp.</p>
+          <label>
+            Nội dung cần trao đổi (không bắt buộc)
+            <textarea name="waitlistDescription" maxLength={200} rows={2} placeholder="Ví dụ: Có thể đến trong giờ hành chính" />
+          </label>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy}>{busy ? 'Đang đăng ký…' : 'Vào danh sách chờ'}</button>
+          </div>
+        </form>
       )}
       {staff && (
         <form className="panel editor" onSubmit={createAppointment}>
@@ -973,7 +1285,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <h2>{patientProfile ? 'Lịch hẹn của tôi' : 'Lịch hẹn trong hệ thống'}</h2>
             <p className="muted">Dữ liệu được lọc theo quyền trên FHIR API.</p>
           </div>
-          <span className="pill">FHIR Appointment</span>
+          <span className="pill">{staff ? `${appointments.filter((appointment) => appointment.status === 'waitlist').length} yêu cầu chờ` : 'FHIR Appointment'}</span>
         </div>
         {appointments.length ? (
           <div className="table-wrap">
@@ -985,11 +1297,12 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   <th>Bác sĩ</th>
                   <th>Nội dung</th>
                   <th>Trạng thái</th>
-                  {staff && <th />}
+                  <th>Ghi chú</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {appointments.map((appointment) => {
+                {displayedAppointments.map((appointment) => {
                   const patientRef = appointment.participant?.find((participant) =>
                     participant.actor?.reference?.startsWith('Patient/')
                   )?.actor?.reference;
@@ -998,14 +1311,44 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   )?.actor?.reference;
                   const patient = patients.find((item) => `Patient/${item.id}` === patientRef);
                   const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerRef);
+                  const waitlistServiceReference = appointment.participant?.find((participant) =>
+                    participant.actor?.reference?.startsWith('HealthcareService/')
+                  )?.actor?.reference;
+                  const waitlistService = hospitalServices.find((service) => `HealthcareService/${service.id}` === waitlistServiceReference);
+                  const waitlistPractitioners = new Set(practitionerRoles
+                    .filter((practitionerRole) => practitionerRole.active !== false &&
+                      practitionerRole.organization?.reference === waitlistService?.providedBy?.reference &&
+                      practitionerRole.healthcareService?.some((reference) => reference.reference === waitlistServiceReference))
+                    .map((practitionerRole) => practitionerRole.practitioner?.reference)
+                    .filter((reference): reference is string => Boolean(reference)));
+                  const waitlistSlots = waitlistService && waitlistService.active !== false
+                    ? availableSlots.filter(({ practitionerReference }) => waitlistPractitioners.has(practitionerReference))
+                    : [];
+                  const isUnscheduledWaitlist = appointment.status === 'waitlist' && !appointment.start;
                   const canCancel =
-                    ['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
-                    !!appointment.start &&
-                    new Date(appointment.start) > new Date();
+                    (!staff && appointment.status === 'waitlist' && !appointment.start) ||
+                    (['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
+                      !!appointment.start && new Date(appointment.start) > new Date());
+                  const canRecordOutcome =
+                    ['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(appointment.status ?? '') &&
+                    !!appointment.start && new Date(appointment.start) <= new Date();
+                  const checkInStart = appointment.start ? new Date(appointment.start).getTime() - 4 * 60 * 60 * 1000 : Number.NaN;
+                  const checkInEnd = appointment.end
+                    ? new Date(appointment.end).getTime()
+                    : appointment.start ? new Date(appointment.start).getTime() + 60 * 60 * 1000 : Number.NaN;
+                  const canCheckIn =
+                    staff && ['booked', 'pending', 'waitlist'].includes(appointment.status ?? '') &&
+                    Date.now() >= checkInStart && Date.now() <= checkInEnd;
+                  const canStartEncounter = staff && ['arrived', 'fulfilled'].includes(appointment.status ?? '') && !!patientRef &&
+                    (role === 'Admin' || practitionerRef === `Practitioner/${profile.id}`);
                   return (
                     <tr key={appointment.id} data-resource-id={appointment.id}>
                       <td>
-                        {appointment.start ? new Date(appointment.start).toLocaleString('vi-VN') : 'Chưa xác định'}
+                        {appointment.start
+                          ? new Date(appointment.start).toLocaleString('vi-VN')
+                          : isUnscheduledWaitlist
+                            ? `Đang chờ từ ${appointment.meta?.lastUpdated ? new Date(appointment.meta.lastUpdated).toLocaleString('vi-VN') : 'chưa rõ thời điểm'}`
+                            : 'Chưa xác định'}
                       </td>
                       <td>
                         {patient
@@ -1015,19 +1358,97 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                             : (patientRef ?? '—')}
                       </td>
                       <td>{practitioner ? personName(practitioner) : practitionerRef ? 'Bác sĩ' : '—'}</td>
-                      <td>{appointment.description || '—'}</td>
+                      <td>
+                        {[appointment.serviceType?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', '), appointment.description]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </td>
                       <td>
                         <span className="pill">{appointment.status}</span>
                       </td>
-                      {staff && (
-                        <td>
-                          {canCancel && (
-                            <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
-                              Hủy
+                      <td>
+                        {[appointment.comment, appointment.note?.map((item) => item.text).filter(Boolean).join(' · ')]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </td>
+                      <td>
+                          {canStartEncounter && (
+                            <button className="button primary" disabled={busy} onClick={() => void startEncounter(appointment, patientRef)}>
+                              {busy ? 'Đang mở…' : 'Mở lần khám'}
                             </button>
                           )}
+                          {isUnscheduledWaitlist && staff && (
+                            <details>
+                              <summary>Ghép lịch chờ</summary>
+                              <form className="editor" onSubmit={(event) => void offerWaitlistAppointment(appointment, event)}>
+                                <label>Slot còn trống · {waitlistService?.name ?? 'Dịch vụ'}
+                                  <select name="waitlistSlot" required defaultValue="">
+                                    <option value="" disabled>Chọn thời gian và bác sĩ</option>
+                                    {waitlistSlots.map(({ slot, practitionerReference }) => {
+                                      const provider = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                                      return <option key={slot.id} value={slot.id}>{new Date(slot.start!).toLocaleString('vi-VN')} · {provider ? personName(provider) : 'Bác sĩ'}</option>;
+                                    })}
+                                  </select>
+                                </label>
+                                {waitlistSlots.length === 0 && <p className="muted">Chưa có Slot trống cho bác sĩ được phân công dịch vụ này.</p>}
+                                <button className="button primary" disabled={busy || waitlistSlots.length === 0}>Xác nhận ghép lịch</button>
+                              </form>
+                            </details>
+                          )}
+                          {canCheckIn && (
+                            <details>
+                              <summary>Check-in</summary>
+                              <form className="editor" onSubmit={(event) => void checkInAppointment(appointment, event)}>
+                                <label>Ghi chú lịch hẹn (bệnh nhân có thể xem)
+                                  <textarea name="checkInNote" maxLength={500} rows={2} />
+                                </label>
+                                <button className="button primary" disabled={busy}>Xác nhận đã đến</button>
+                              </form>
+                            </details>
+                          )}
+                          {canCancel && (
+                            <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
+                              {patientProfile ? 'Hủy lịch của tôi' : 'Hủy'}
+                            </button>
+                          )}
+                          {!staff && canCancel && !isUnscheduledWaitlist && (
+                            <details>
+                              <summary>Đổi lịch</summary>
+                              <form className="editor" onSubmit={(event) => void rescheduleAppointment(appointment, event)}>
+                                <label>
+                                  Khung giờ mới
+                                  <select name="replacementSlot" required defaultValue="">
+                                    <option value="" disabled>Chọn khung giờ</option>
+                                    {availableSlots.map(({ slot, practitionerReference }) => {
+                                      const provider = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                                      return (
+                                        <option key={slot.id} value={slot.id}>
+                                          {new Date(slot.start!).toLocaleString('vi-VN')} · {provider ? personName(provider) : 'Bác sĩ'}
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                </label>
+                                <button className="button" disabled={busy || availableSlots.length === 0}>
+                                  {busy ? 'Đang đổi…' : 'Xác nhận đổi lịch'}
+                                </button>
+                              </form>
+                            </details>
+                          )}
+                          {staff && canRecordOutcome && <details>
+                            <summary>Ghi nhận kết quả</summary>
+                            <form className="editor" onSubmit={(event) => void recordAppointmentOutcome(appointment, event)}>
+                              <label>Kết quả
+                                <select name="appointmentOutcome" defaultValue="fulfilled">
+                                  <option value="fulfilled">Đã hoàn tất</option>
+                                  <option value="noshow" disabled={!!appointment.end && new Date(appointment.end) > new Date()}>Bệnh nhân không đến</option>
+                                </select>
+                              </label>
+                              <label>Lý do/ghi chú<textarea name="appointmentOutcomeReason" maxLength={500} rows={2} required /></label>
+                              <button className="button" disabled={busy}>Lưu kết quả</button>
+                            </form>
+                          </details>}
                         </td>
-                      )}
                     </tr>
                   );
                 })}
@@ -1106,7 +1527,7 @@ function PeopleList({ type }: { type: 'Patient' | 'Practitioner' }) {
         title={type === 'Patient' ? 'Quản lý bệnh nhân' : 'Danh sách bác sĩ'}
         description="Tìm kiếm và quản lý thông tin hồ sơ theo chuẩn FHIR."
         action={
-          (type === 'Patient' || admin) && (
+          admin && (
             <Link className="button primary" to={`${base}/new`}>
               + Thêm {type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}
             </Link>
@@ -1182,6 +1603,7 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
   const [person, setPerson] = useState<Patient | Practitioner>();
   const [error, setError] = useState<unknown>();
   const role = getRole(client.getProjectMembership(), client.getProfile());
+  const profile = client.getProfile();
   const base = type === 'Patient' ? '/patients' : '/doctors';
   useEffect(() => {
     setPerson(undefined);
@@ -1197,7 +1619,7 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
       setError(e);
     }
   }
-  const canEdit = type === 'Patient' || role === 'Admin';
+  const canEdit = role === 'Admin' || (type === 'Patient' && (role === 'Doctor' || (role === 'Patient' && id === profile?.id)));
   return (
     <>
       <PageTitle
@@ -1244,6 +1666,11 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
   );
 }
 
+function PatientEditorRoute({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }) {
+  const { id } = useParams();
+  return role !== 'Patient' || profile.id === id ? <PersonEditor type="Patient" /> : <Forbidden />;
+}
+
 function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
   const client = useMedplum();
   const { id } = useParams();
@@ -1251,30 +1678,63 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
   const [person, setPerson] = useState<Patient | Practitioner>();
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const profile = client.getProfile();
+  const isAdmin = client.getProjectMembership()?.admin === true;
+  const isPatientSelf = type === 'Patient' && profile?.resourceType === 'Patient' && profile.id === id;
   const base = type === 'Patient' ? '/patients' : '/doctors';
   useEffect(() => {
     setPerson(undefined);
     if (id) client.readResource(type, id).then(setPerson).catch(setError);
     else setPerson({ resourceType: type, active: true });
   }, [client, id, type]);
+  useEffect(() => {
+    if (type === 'Patient' && isAdmin) {
+      client.searchResources('Practitioner', { _count: '100', _sort: 'name' }).then(setPractitioners).catch(setError);
+    }
+  }, [client, type, isAdmin]);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!person) return;
     const data = new FormData(event.currentTarget);
     setBusy(true);
     setError(undefined);
-    const resource = {
-      ...person,
-      name: [{ family: String(data.get('family')).trim(), given: [String(data.get('given')).trim()] }],
-      gender: String(data.get('gender')) || undefined,
-      birthDate: String(data.get('birthDate')) || undefined,
-      telecom: [
+    const telecom = [
         { system: 'phone', value: String(data.get('phone')) },
         { system: 'email', value: String(data.get('email')) },
-      ].filter((t) => t.value),
-      address: [{ text: String(data.get('address')) }],
-      active: data.get('active') === 'on',
-    } as Patient | Practitioner;
+      ].filter((t) => t.value);
+    const address = [{ text: String(data.get('address')) }];
+    const existingTelecom = person.resourceType === 'Patient' ? person.telecom ?? [] : [];
+    const selfTelecom = [
+      ...existingTelecom.filter((contact) => contact.system !== 'phone' && contact.system !== 'email'),
+      ...(['phone', 'email'] as const).flatMap((system) => {
+        const existing = existingTelecom.filter((contact) => contact.system === system);
+        const value = String(data.get(system)).trim();
+        return value ? [{ ...existing[0], system, value }, ...existing.slice(1)] : existing.slice(1);
+      }),
+    ];
+    const existingAddresses = person.resourceType === 'Patient' ? person.address ?? [] : [];
+    const addressText = String(data.get('address')).trim();
+    const selfAddress = addressText
+      ? [{ ...(existingAddresses[0] ?? {}), text: addressText }, ...existingAddresses.slice(1)]
+      : existingAddresses.slice(1);
+    const resource = isPatientSelf
+      ? { ...person, telecom: selfTelecom, address: selfAddress } as Patient | Practitioner
+      : {
+        ...person,
+        name: [{ family: String(data.get('family')).trim(), given: [String(data.get('given')).trim()] }],
+        gender: String(data.get('gender')) || undefined,
+        birthDate: String(data.get('birthDate')) || undefined,
+        telecom,
+        address,
+        active: data.get('active') === 'on',
+        ...(type === 'Patient' && isAdmin ? {
+        generalPractitioner: [
+          ...(person.resourceType === 'Patient' ? person.generalPractitioner?.filter((reference) => !reference.reference?.startsWith('Practitioner/')) ?? [] : []),
+          ...(data.get('generalPractitioner') ? [{ reference: `Practitioner/${String(data.get('generalPractitioner'))}` }] : []),
+        ],
+        } : {}),
+      } as Patient | Practitioner;
     try {
       const result = resource.id ? await client.updateResource(resource) : await client.createResource(resource);
       navigate(`${base}/${result.id}`);
@@ -1288,8 +1748,8 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
     <>
       <PageTitle
         eyebrow="PERSON RECORD"
-        title={`${id ? 'Chỉnh sửa' : 'Thêm'} ${type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}`}
-        description="Thông tin được kiểm tra và lưu trực tiếp qua FHIR API."
+        title={isPatientSelf ? 'Cập nhật thông tin liên hệ' : `${id ? 'Chỉnh sửa' : 'Thêm'} ${type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}`}
+        description={isPatientSelf ? 'Cập nhật điện thoại, email liên hệ và địa chỉ. Email đăng nhập không thay đổi.' : 'Thông tin được kiểm tra và lưu trực tiếp qua FHIR API.'}
       />
       <ErrorMessage error={error} />
       {person && (
@@ -1297,11 +1757,11 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
           <div className="form-grid">
             <label>
               Họ
-              <input name="family" required maxLength={100} defaultValue={person.name?.[0]?.family} />
+              <input name="family" required={!isPatientSelf} maxLength={100} readOnly={isPatientSelf} defaultValue={person.name?.[0]?.family} />
             </label>
             <label>
               Tên
-              <input name="given" required maxLength={100} defaultValue={person.name?.[0]?.given?.join(' ')} />
+              <input name="given" required={!isPatientSelf} maxLength={100} readOnly={isPatientSelf} defaultValue={person.name?.[0]?.given?.join(' ')} />
             </label>
             <label>
               Ngày sinh
@@ -1309,12 +1769,13 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
                 name="birthDate"
                 type="date"
                 max={new Date().toISOString().slice(0, 10)}
+                readOnly={isPatientSelf}
                 defaultValue={person.birthDate}
               />
             </label>
             <label>
               Giới tính
-              <select name="gender" defaultValue={person.gender ?? ''}>
+              <select name="gender" disabled={isPatientSelf} defaultValue={person.gender ?? ''}>
                 <option value="">Chưa xác định</option>
                 <option value="male">Nam</option>
                 <option value="female">Nữ</option>
@@ -1339,13 +1800,30 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
                 defaultValue={person.telecom?.find((t) => t.system === 'email')?.value}
               />
             </label>
+            {type === 'Patient' && isAdmin && <label>
+              Bác sĩ phụ trách
+              <select
+                name="generalPractitioner"
+                defaultValue={person.generalPractitioner?.find((reference) => reference.reference?.startsWith('Practitioner/'))?.reference?.slice('Practitioner/'.length) ?? ''}
+              >
+                <option value="">Chưa phân công</option>
+                {practitioners.map((practitioner) => (
+                  <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}{practitioner.active === false ? ' · Ngừng hoạt động' : ''}</option>
+                ))}
+              </select>
+              <small className="muted">Patient chưa được phân công chỉ hiển thị với Admin và chính bệnh nhân.</small>
+            </label>}
             <label className="full-width">
               Địa chỉ
-              <input name="address" maxLength={300} defaultValue={person.address?.[0]?.text} />
+              <input
+                name="address"
+                maxLength={300}
+                defaultValue={person.address?.[0]?.text ?? (isPatientSelf ? [...(person.address?.[0]?.line ?? []), person.address?.[0]?.city, person.address?.[0]?.district, person.address?.[0]?.state, person.address?.[0]?.postalCode, person.address?.[0]?.country].filter(Boolean).join(', ') : undefined)}
+              />
             </label>
           </div>
           <label className="checkbox">
-            <input name="active" type="checkbox" defaultChecked={person.active !== false} />
+            <input name="active" type="checkbox" disabled={isPatientSelf} defaultChecked={person.active !== false} />
             Đang hoạt động
           </label>
           <div className="form-actions">
@@ -1370,23 +1848,31 @@ function Users() {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
-    const data = await client.searchResources('ProjectMembership', { _count: '100' });
-    const humanMembers = data.filter(
-      (member) =>
-        member.user.reference?.startsWith('User/') &&
-        (member.profile.reference?.startsWith('Patient/') || member.profile.reference?.startsWith('Practitioner/'))
-    );
-    setMembers(humanMembers);
-    const profileData = await Promise.all(
-      humanMembers.map((member) => {
-        const [type, id] = member.profile.reference!.split('/');
-        return client.readResource(type as 'Patient' | 'Practitioner', id);
-      })
-    );
-    setProfiles(Object.fromEntries(profileData.map((profile) => [`${profile.resourceType}/${profile.id}`, profile])));
-    const people = await client.searchResources('User', { _count: '100' });
-    setUsers(Object.fromEntries(people.map((u) => [u.id!, u])));
+    setLoading(true);
+    setError(undefined);
+    try {
+      const data = await client.searchResources('ProjectMembership', { _count: '100' });
+      const humanMembers = data.filter(
+        (member) =>
+          member.user.reference?.startsWith('User/') &&
+          (member.profile.reference?.startsWith('Patient/') || member.profile.reference?.startsWith('Practitioner/'))
+      );
+      setMembers(humanMembers);
+      const profileData = await Promise.all(
+        humanMembers.map((member) => {
+          const [type, id] = member.profile.reference!.split('/');
+          return client.readResource(type as 'Patient' | 'Practitioner', id);
+        })
+      );
+      setProfiles(Object.fromEntries(profileData.map((profile) => [`${profile.resourceType}/${profile.id}`, profile])));
+      const people = await client.searchResources('User', { _count: '100' });
+      setUsers(Object.fromEntries(people.map((u) => [u.id!, u])));
+    } finally {
+      setLoading(false);
+    }
   }, [client]);
   useEffect(() => {
     void load().catch(setError);
@@ -1422,13 +1908,49 @@ function Users() {
   }
   async function toggle(member: ProjectMembership) {
     if (member.id === client.getProjectMembership()?.id) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
     try {
       await client.updateResource({ ...member, active: member.active === false });
       await load();
+      setMessage(member.active === false ? 'Đã mở khóa thành viên.' : 'Đã khóa thành viên.');
     } catch (e) {
       setError(e);
+    } finally {
+      setBusy(false);
     }
   }
+  async function setAdmin(member: ProjectMembership, admin: boolean) {
+    if (!member.id || member.id === client.getProjectMembership()?.id || member.admin === admin) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.updateResource({ ...member, admin });
+      await load();
+      setMessage(admin ? 'Đã cấp quyền Admin.' : 'Đã chuyển thành viên về Doctor.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const visibleMembers = members.filter((member) => {
+    const user = users[member.user.reference?.split('/')[1] ?? ''];
+    const profile = profiles[member.profile.reference ?? ''];
+    const haystack = [
+      user?.firstName,
+      user?.lastName,
+      user?.email,
+      profile ? personName(profile) : '',
+      profile?.telecom?.find((contact) => contact.system === 'email')?.value,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase();
+    return haystack.includes(query.trim().toLocaleLowerCase());
+  });
   return (
     <>
       <PageTitle
@@ -1447,6 +1969,11 @@ function Users() {
           <h2>Thành viên</h2>
           <span className="pill">{members.length} tài khoản</span>
         </div>
+        <label className="directory-search">
+          Tìm tên hoặc email
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tên, họ hoặc email đăng nhập" />
+        </label>
+        {loading && <p className="empty">Đang tải thành viên…</p>}
         <div className="table-wrap">
           <table>
             <thead>
@@ -1458,7 +1985,7 @@ function Users() {
               </tr>
             </thead>
             <tbody>
-              {members.map((member) => {
+              {visibleMembers.map((member) => {
                 const user = users[member.user.reference?.split('/')[1] ?? ''];
                 const profile = profiles[member.profile.reference ?? ''];
                 return (
@@ -1475,11 +2002,18 @@ function Users() {
                     </td>
                     <td>
                       {member.admin ? 'Admin' : member.profile.reference?.startsWith('Patient/') ? 'Patient' : 'Doctor'}
+                      {member.profile.reference?.startsWith('Practitioner/') &&
+                        member.id !== client.getProjectMembership()?.id &&
+                        member.active !== false && (
+                          <button className="text-button" disabled={busy} onClick={() => void setAdmin(member, !member.admin)}>
+                            {member.admin ? 'Chuyển về Doctor' : 'Cấp quyền Admin'}
+                          </button>
+                        )}
                     </td>
                     <td>{member.active === false ? 'Đã khóa' : 'Hoạt động'}</td>
                     <td>
                       {member.id !== client.getProjectMembership()?.id && (
-                        <button className="button secondary" onClick={() => toggle(member)}>
+                        <button className="button secondary" disabled={busy} onClick={() => void toggle(member)}>
                           {member.active === false ? 'Mở khóa' : 'Khóa tài khoản'}
                         </button>
                       )}
@@ -1487,6 +2021,13 @@ function Users() {
                   </tr>
                 );
               })}
+              {!loading && visibleMembers.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty">
+                    Không tìm thấy thành viên phù hợp.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -4,19 +4,41 @@ import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
 import { Router } from 'express';
 import { getAuthenticatedContext } from '../context';
 import { authenticateRequest } from '../oauth/middleware';
+import {
+  appointmentAvailableHandler,
+  appointmentBookHandler,
+  appointmentCancelHandler,
+  appointmentCheckInHandler,
+  appointmentOfferWaitlistHandler,
+  appointmentRecordOutcomeHandler,
+  appointmentRescheduleHandler,
+  appointmentStartEncounterHandler,
+  appointmentWaitlistHandler,
+} from './operations/appointments';
+import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
+import { encounterCompleteHandler } from './operations/encounters';
+import { medicationStatementRecordHandler, medicationStatementUpdateStatusHandler } from './operations/medicationstatement';
+import { medicationRequestRecordHandler, medicationRequestUpdateStatusHandler } from './operations/medicationrequest';
+import { allergyIntoleranceRecordHandler, allergyIntoleranceReviewHandler } from './operations/allergyintolerance';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
 export const SUPPORTED_FHIR_RESOURCES = [
   'Patient',
   'Practitioner',
+  'PractitionerRole',
   'Appointment',
   'Encounter',
   'Condition',
   'Observation',
+  'MedicationRequest',
+  'MedicationStatement',
+  'MedicationAdministration',
+  'AllergyIntolerance',
   'Schedule',
   'Slot',
   'Organization',
+  'HealthcareService',
   'User',
   'Project',
   'ProjectMembership',
@@ -55,6 +77,23 @@ fhirRouter.get('/metadata', (_req, res) =>
 fhirRouter.use(authenticateRequest);
 const router = new FhirRouter({ introspectionEnabled: true });
 router.add('POST', '/Project/$init', projectInitHandler);
+router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
+router.add('POST', '/Appointment/$book', appointmentBookHandler);
+router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
+router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
+router.add('POST', '/Appointment/$record-outcome', appointmentRecordOutcomeHandler);
+router.add('POST', '/Appointment/$start-encounter', appointmentStartEncounterHandler);
+router.add('POST', '/Encounter/$complete', encounterCompleteHandler);
+router.add('POST', '/MedicationStatement/$record', medicationStatementRecordHandler);
+router.add('POST', '/MedicationStatement/$update-status', medicationStatementUpdateStatusHandler);
+router.add('POST', '/MedicationRequest/$record', medicationRequestRecordHandler);
+router.add('POST', '/MedicationRequest/$update-status', medicationRequestUpdateStatusHandler);
+router.add('POST', '/AllergyIntolerance/$record', allergyIntoleranceRecordHandler);
+router.add('POST', '/AllergyIntolerance/$review', allergyIntoleranceReviewHandler);
+router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);
+router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
+router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
+router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

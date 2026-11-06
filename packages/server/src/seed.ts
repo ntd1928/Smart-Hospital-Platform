@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { WithId } from '@medplum/core';
 import { createReference, parseSearchRequest } from '@medplum/core';
-import type { ClientApplication, Project, ProjectMembership, User } from '@medplum/fhirtypes';
+import type {
+  AccessPolicy,
+  AccessPolicyResource,
+  ClientApplication,
+  Project,
+  ProjectMembership,
+  User,
+} from '@medplum/fhirtypes';
 import { bcryptHashPassword, createProfile, createProjectMembership } from './auth/utils';
 import type { ServerConfig } from './config/utils';
 import { r4ProjectId } from './constants';
@@ -39,6 +46,8 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     await createSuperAdmin(globalShardRepo, config);
   }
 
+  await reconcileDefaultMedicationPolicies(globalShardRepo);
+
   // Shards are seeded serially. Potential optimizations if seeding new shards becomes slow:
   // - Read and parse the base definition bundles once and share them across shards; today each shard
   //   re-reads every file via processBaseDefinitions.
@@ -52,7 +61,86 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     if (!(await shardSystemRepo.searchOne({ resourceType: 'StructureDefinition' }))) {
       await seedBaseDefinitions(shardSystemRepo);
     }
+    await reconcileDefaultMedicationPolicies(shardSystemRepo);
   }
+}
+
+/** Keep Patient compartment policies scoped and restrict direct Practitioner clinical/directory writes. */
+async function reconcileDefaultMedicationPolicies(systemRepo: SystemRepository): Promise<void> {
+  await systemRepo.processAllResources<Project>({ resourceType: 'Project' }, async (project) => {
+    await reconcilePatientClinicalPolicy(systemRepo, project);
+    await reconcilePractitionerRestrictedWritePolicy(systemRepo, project);
+  });
+}
+
+async function reconcilePatientClinicalPolicy(systemRepo: SystemRepository, project: WithId<Project>): Promise<void> {
+  const patientPolicyRef = project.defaultAccessPolicies?.find((policy) => policy.profileType === 'Patient')?.accessPolicy;
+  const policyId = patientPolicyRef?.reference?.match(/^AccessPolicy\/([^/]+)$/)?.[1];
+  if (!policyId) return;
+  const policy = await systemRepo.readResource<AccessPolicy>('AccessPolicy', policyId);
+  if (
+    policy.name !== 'Default Patient Access Policy' ||
+    policy.compartment?.reference !== '%patient' ||
+    policy.meta?.project !== project.id
+  ) return;
+
+  const allowed: NonNullable<AccessPolicyResource['interaction']> = ['read', 'search'];
+  const appointmentRule = policy.resource?.find((rule) => rule.resourceType === 'Appointment');
+  const administrationRule = policy.resource?.find((rule) => rule.resourceType === 'MedicationAdministration');
+  const appointmentInteraction = appointmentRule?.interaction;
+  const administrationInteraction = administrationRule?.interaction;
+  const appointmentRestricted =
+    !appointmentRule ||
+    Boolean(
+      appointmentInteraction &&
+        appointmentInteraction.length === allowed.length &&
+        allowed.every((value) => appointmentInteraction.includes(value))
+    );
+  const administrationRestricted = Boolean(
+    administrationRule?.criteria === 'MedicationAdministration?_compartment=%patient' &&
+      administrationInteraction &&
+      administrationInteraction.length === allowed.length &&
+      allowed.every((value) => administrationInteraction.includes(value))
+  );
+  if (appointmentRestricted && administrationRestricted) return;
+
+  await systemRepo.updateResource<AccessPolicy>({
+    ...policy,
+    resource: [
+      ...(policy.resource ?? []).map((rule) => {
+        if (rule === appointmentRule) return { ...rule, interaction: allowed };
+        if (rule === administrationRule) {
+          return {
+            ...rule,
+            criteria: 'MedicationAdministration?_compartment=%patient',
+            interaction: allowed,
+          };
+        }
+        return rule;
+      }),
+      ...(administrationRule ? [] : [
+        {
+          resourceType: 'MedicationAdministration' as const,
+          criteria: 'MedicationAdministration?_compartment=%patient',
+          interaction: allowed,
+        },
+      ]),
+    ],
+  });
+  globalLogger.info('Reconciled default Patient clinical policy', { projectId: project.id });
+}
+
+async function reconcilePractitionerRestrictedWritePolicy(systemRepo: SystemRepository, project: WithId<Project>): Promise<void> {
+  const practitionerPolicyRef = project.defaultAccessPolicies?.find((policy) => policy.profileType === 'Practitioner')?.accessPolicy;
+  const policyId = practitionerPolicyRef?.reference?.match(/^AccessPolicy\/([^/]+)$/)?.[1];
+  if (!policyId) return;
+  const policy = await systemRepo.readResource<AccessPolicy>('AccessPolicy', policyId);
+  if (policy.name !== 'Default Practitioner Access Policy' || policy.meta?.project !== project.id) return;
+  const restrictedTypes = new Set(['MedicationAdministration', 'Organization', 'HealthcareService', 'PractitionerRole']);
+  const resource = policy.resource?.filter((rule) => !restrictedTypes.has(rule.resourceType ?? ''));
+  if (resource?.length === policy.resource?.length) return;
+  await systemRepo.updateResource<AccessPolicy>({ ...policy, resource });
+  globalLogger.info('Restricted direct Practitioner clinical and directory writes', { projectId: project.id });
 }
 
 async function createR4Project(systemRepo: SystemRepository): Promise<WithId<Project>> {

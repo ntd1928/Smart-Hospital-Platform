@@ -282,6 +282,60 @@ small {
   margin-bottom: 0;
   font-size: 11px;
 }
+.directory-card {
+  display: grid;
+  gap: 14px;
+  padding: 22px 25px;
+  border-top: 1px solid #e9eee9;
+}
+
+.directory-search {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 28rem;
+  margin: 1rem 0;
+  color: #7a8985;
+  font-size: 0.875rem;
+}
+
+.text-button {
+  display: block;
+  padding: 0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: #176b5c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.text-button:disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.directory-card .panel-heading {
+  padding: 0;
+}
+.directory-card h3,
+.directory-card h4 {
+  margin: 0;
+}
+.directory-card ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 20px;
+}
+.directory-card .service-practitioners {
+  gap: 8px;
+  margin-top: 0.4rem;
+  color: #566864;
+  font-size: 0.9rem;
+}
+.assign-practitioner {
+  align-items: end;
+  margin-top: 0.75rem;
+}
 .pill {
   display: inline-block;
   border-radius: 5px;
@@ -612,5 +666,54 @@ footer {
     padding: 20px;
     gap: 20px;
     font-size: 9px;
+  }
+}
+
+.ehr-print-summary {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 16mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .ehr-print-summary,
+  .ehr-print-summary * {
+    visibility: visible !important;
+  }
+
+  .ehr-print-summary {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    color: #111;
+    background: #fff;
+    font: 11pt/1.45 Arial, sans-serif;
+  }
+
+  .ehr-print-summary h1 {
+    font-size: 20pt;
+  }
+
+  .ehr-print-summary h2 {
+    margin: 14pt 0 5pt;
+    color: #111;
+    font-size: 13pt;
+  }
+
+  .ehr-print-summary h3 {
+    margin: 9pt 0 3pt;
+    font-size: 11pt;
+  }
+
+  .ehr-print-summary ul {
+    margin: 4pt 0;
+    padding-left: 18pt;
   }
 }
