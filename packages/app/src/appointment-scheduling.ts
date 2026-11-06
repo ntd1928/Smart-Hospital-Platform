@@ -21,6 +21,26 @@ export interface SlotInterval {
   end: Date;
 }
 
+export interface RecurringSlotSeries {
+  id: string;
+  slots: Slot[];
+}
+
+export function groupRecurringSlotSeries(slots: Slot[]): RecurringSlotSeries[] {
+  const grouped = new Map<string, Slot[]>();
+  for (const slot of slots) {
+    const seriesId = slot.identifier?.find((identifier) => identifier.system === RECURRING_SLOT_SERIES_SYSTEM)?.value;
+    if (!seriesId) continue;
+    const seriesSlots = grouped.get(seriesId) ?? [];
+    seriesSlots.push(slot);
+    grouped.set(seriesId, seriesSlots);
+  }
+  return Array.from(grouped, ([id, seriesSlots]) => ({
+    id,
+    slots: seriesSlots.sort((a, b) => (a.start ?? '').localeCompare(b.start ?? '')),
+  }));
+}
+
 /** Expands a local time range into dated intervals for selected weekdays. */
 export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInterval[] {
   const { startDate, endDate, startTime, endTime, weekdays } = input;
