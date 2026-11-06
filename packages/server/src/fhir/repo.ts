@@ -67,6 +67,7 @@ import type {
   Reference,
   Resource,
   ResourceType,
+  Schedule,
   Slot,
 } from '@medplum/fhirtypes';
 import assert from 'node:assert';
@@ -1013,7 +1014,16 @@ export class Repository extends FhirRepository implements Disposable {
 
   private async ensureNoSlotConflict(resource: Resource, excludeId?: string): Promise<void> {
     if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
-    if (await findSlotConflict(this, resource as Slot, excludeId)) {
+    const slot = resource as Slot;
+    const scheduleReference = slot.schedule?.reference;
+    if (scheduleReference?.startsWith('Schedule/')) {
+      const scheduleId = scheduleReference.slice('Schedule/'.length);
+      const schedule = await this.readResource<Schedule>('Schedule', scheduleId);
+      if (schedule.active === false) {
+        throw new OperationOutcomeError(badRequest('Cannot create or update a Slot in an inactive Schedule.'));
+      }
+    }
+    if (await findSlotConflict(this, slot, excludeId)) {
       throw new OperationOutcomeError({
         resourceType: 'OperationOutcome',
         issue: [
