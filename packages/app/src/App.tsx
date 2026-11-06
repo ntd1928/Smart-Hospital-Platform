@@ -449,6 +449,75 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function createAvailability(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const start = new Date(String(data.get('availabilityStart')));
+    const end = new Date(String(data.get('availabilityEnd')));
+    const practitionerId = role === 'Doctor' ? profile.id : String(data.get('availabilityPractitioner'));
+    if (!practitionerId || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start <= new Date() || end <= start) {
+      setError(new Error('Chọn bác sĩ và khung giờ tương lai hợp lệ.'));
+      return;
+    }
+    const practitionerReference = `Practitioner/${practitionerId}`;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const existingAppointments = await client.searchResources('Appointment', {
+        actor: practitionerReference,
+        _count: '1000',
+      });
+      const appointmentConflict = findAppointmentConflict(existingAppointments, practitionerId, start, end);
+      if (appointmentConflict) {
+        setError(new Error('Không thể mở khung giờ trong khoảng thời gian đã có lịch hẹn.'));
+        return;
+      }
+      const practitionerSchedules = await client.searchResources('Schedule', {
+        actor: practitionerReference,
+        _count: '100',
+      });
+      let schedule = practitionerSchedules.find((item) => item.active !== false);
+      if (!schedule) {
+        schedule = await client.createResource<Schedule>({
+          resourceType: 'Schedule',
+          identifier: [{ system: 'urn:smart-hospital:availability', value: practitionerId }],
+          active: true,
+          actor: [{ reference: practitionerReference }],
+        });
+      }
+      const existingSlots = await client.searchResources('Slot', {
+        schedule: `Schedule/${schedule.id}`,
+        _count: '1000',
+      });
+      const slotConflict = existingSlots.some((slot) => {
+        if (!slot.start || !slot.end || slot.status === 'entered-in-error') return false;
+        const slotStart = new Date(slot.start);
+        const slotEnd = new Date(slot.end);
+        return Number.isFinite(slotStart.getTime()) && Number.isFinite(slotEnd.getTime()) && start < slotEnd && slotStart < end;
+      });
+      if (slotConflict) {
+        setError(new Error('Khung giờ giao nhau với một Slot hiện có.'));
+        return;
+      }
+      await client.createResource<Slot>({
+        resourceType: 'Slot',
+        schedule: { reference: `Schedule/${schedule.id}` },
+        status: 'free',
+        start: start.toISOString(),
+        end: end.toISOString(),
+      });
+      setMessage('Đã thêm khung giờ trống.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const availableSlots = findAvailableSlots(slots, schedules, role === 'Doctor' ? doctorProfile?.id : undefined).filter(
@@ -518,6 +587,54 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
               disabled={busy || patients.length === 0 || availableSlots.length === 0}
             >
               {busy ? 'Đang lưu…' : 'Tạo lịch hẹn'}
+            </button>
+          </div>
+        </form>
+      )}
+      {staff && (
+        <form className="panel editor" onSubmit={createAvailability}>
+          <h2>Thêm khung giờ trống</h2>
+          <p className="muted">Tạo một Slot trong Schedule của bác sĩ; khung giờ lặp chưa được hỗ trợ.</p>
+          <div className="form-grid">
+            {role === 'Admin' ? (
+              <label>
+                Bác sĩ
+                <select name="availabilityPractitioner" required defaultValue="">
+                  <option value="" disabled>
+                    Chọn bác sĩ
+                  </option>
+                  {practitioners
+                    .filter((practitioner) => practitioner.active !== false)
+                    .map((practitioner) => (
+                      <option key={practitioner.id} value={practitioner.id}>
+                        {personName(practitioner)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : (
+              <label>
+                Bác sĩ
+                <input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled />
+              </label>
+            )}
+            <label>
+              Bắt đầu
+              <input
+                name="availabilityStart"
+                type="datetime-local"
+                min={localDateTimeValue(new Date())}
+                required
+              />
+            </label>
+            <label>
+              Kết thúc
+              <input name="availabilityEnd" type="datetime-local" required />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
+              {busy ? 'Đang lưu…' : 'Thêm Slot'}
             </button>
           </div>
         </form>
@@ -595,6 +712,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       </section>
     </>
   );
+}
+
+function localDateTimeValue(date: Date): string {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 function PageTitle({
