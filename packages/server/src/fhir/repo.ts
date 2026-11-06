@@ -107,7 +107,12 @@ import {
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
-import { findAppointmentConflict, findSlotConflict, getAppointmentPractitionerReferences } from './appointment-conflicts';
+import {
+  findAppointmentConflict,
+  findAppointmentForSlot,
+  findSlotConflict,
+  getAppointmentPractitionerReferences,
+} from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
@@ -1029,6 +1034,9 @@ export class Repository extends FhirRepository implements Disposable {
       if (schedule.active === false) {
         throw new OperationOutcomeError(badRequest('Cannot create or update a Slot in an inactive Schedule.'));
       }
+    }
+    if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
+      throw new OperationOutcomeError(badRequest('Cannot mark a Slot free while an active Appointment references it.'));
     }
     if (await findSlotConflict(this, slot, excludeId)) {
       throw new OperationOutcomeError({
