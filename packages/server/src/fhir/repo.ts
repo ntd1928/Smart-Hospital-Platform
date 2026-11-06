@@ -1017,6 +1017,13 @@ export class Repository extends FhirRepository implements Disposable {
     const slot = resource as Slot;
     const scheduleReference = slot.schedule?.reference;
     if (scheduleReference?.startsWith('Schedule/')) {
+      const start = slot.start ? new Date(slot.start).getTime() : Number.NaN;
+      const end = slot.end ? new Date(slot.end).getTime() : Number.NaN;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw new OperationOutcomeError(badRequest('Slot must have a valid start and end time.'));
+      }
+    }
+    if (scheduleReference?.startsWith('Schedule/')) {
       const scheduleId = scheduleReference.slice('Schedule/'.length);
       const schedule = await this.readResource<Schedule>('Schedule', scheduleId);
       if (schedule.active === false) {
