@@ -15,6 +15,8 @@ const observationCategoryLabels: Record<string, string> = {
 export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }): React.ReactElement {
   const client = useMedplum();
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatientRecord, setSelectedPatientRecord] = useState<Patient>();
+  const [patientSearch, setPatientSearch] = useState('');
   const [patientId, setPatientId] = useState(role === 'Patient' ? profile.id ?? '' : '');
   const [encounters, setEncounters] = useState<Encounter[]>([]);
   const [conditions, setConditions] = useState<Condition[]>([]);
@@ -39,19 +41,26 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   useEffect(() => {
     if (role === 'Patient') return;
     let live = true;
-    client.searchResources('Patient', { _count: '100', _sort: 'name' })
-      .then((results) => {
-        if (!live) return;
-        setPatients(results);
-        if (results[0]?.id) setPatientId((current) => current || results[0].id || '');
-      })
-      .catch((e) => {
-        if (live) setError(e);
-      });
+    const timer = window.setTimeout(() => {
+      const search = patientSearch.trim();
+      client.searchResources('Patient', { ...(search ? { name: search } : {}), _count: '100', _sort: 'name' })
+        .then((results) => {
+          if (!live) return;
+          setPatients(results);
+          if (!search && results[0]?.id) {
+            setPatientId((current) => current || results[0].id || '');
+            setSelectedPatientRecord((current) => current ?? results[0]);
+          }
+        })
+        .catch((e) => {
+          if (live) setError(e);
+        });
+    }, patientSearch.trim() ? 250 : 0);
     return () => {
       live = false;
+      window.clearTimeout(timer);
     };
-  }, [client, role]);
+  }, [client, role, patientSearch]);
 
   useEffect(() => {
     if (!patientId) return;
@@ -293,7 +302,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  const selectedPatient = patients.find((patient) => patient.id === patientId);
+  const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
   const latestObservation = observations
@@ -340,8 +349,20 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {role !== 'Patient' ? (
         <section className="panel editor">
           <label>
+            Tìm bệnh nhân theo tên
+            <input value={patientSearch} onChange={(event) => setPatientSearch(event.currentTarget.value)} placeholder="Nhập tên bệnh nhân" />
+          </label>
+          <label>
             Bệnh nhân
-            <select value={patientId} onChange={(event) => setPatientId(event.currentTarget.value)}>
+            <select value={patientId} onChange={(event) => {
+              const nextPatientId = event.currentTarget.value;
+              setPatientId(nextPatientId);
+              setSelectedPatientRecord(patients.find((patient) => patient.id === nextPatientId));
+            }}>
+              <option value="">Chọn bệnh nhân</option>
+              {selectedPatientRecord?.id === patientId && !patients.some((patient) => patient.id === patientId) && (
+                <option value={selectedPatientRecord.id}>{personName(selectedPatientRecord)}</option>
+              )}
               {patients.map((patient) => (
                 <option key={patient.id} value={patient.id}>{personName(patient)}</option>
               ))}
