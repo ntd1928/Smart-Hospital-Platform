@@ -8,6 +8,7 @@ import {
   appointmentAvailableHandler,
   appointmentBookHandler,
   appointmentCancelHandler,
+  appointmentCheckInHandler,
   appointmentRescheduleHandler,
 } from './operations/appointments';
 import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
@@ -71,6 +72,7 @@ router.add('POST', '/Project/$init', projectInitHandler);
 router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
 router.add('POST', '/Appointment/$book', appointmentBookHandler);
 router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
+router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
 router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);
 fhirRouter.use(async (req, res) => {

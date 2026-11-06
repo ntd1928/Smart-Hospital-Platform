@@ -66,6 +66,19 @@ const rescheduleOperation = makeOperationDefinition(
   }
 );
 
+const checkInOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-check-in',
+    code: 'check-in',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'note', 'string', 0, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 interface BookParameters {
   slot: Reference;
   description?: string;
@@ -83,6 +96,53 @@ interface CancelParameters {
 interface RescheduleParameters {
   appointment: Reference;
   slot: Reference;
+}
+
+interface CheckInParameters {
+  appointment: Reference;
+  note?: string;
+}
+
+/** Marks an upcoming appointment as arrived and records the authenticated staff member. */
+export async function appointmentCheckInHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!practitionerId) throw new OperationOutcomeError(forbidden('Only authenticated Practitioner staff may check in appointments.'));
+  const params = parseInputParameters<CheckInParameters>(checkInOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  if (!appointmentId) return [badRequest('An Appointment reference is required.')];
+  const note = params.note?.trim();
+  if (note && note.length > 500) return [badRequest('Check-in note must be 500 characters or fewer.')];
+  const practitioner = await ctx.systemRepo.readResource<Practitioner>('Practitioner', practitionerId);
+  if (practitioner.active === false) throw new OperationOutcomeError(forbidden('Inactive Practitioners cannot check in appointments.'));
+
+  const appointment = await ctx.repo.ensureInTransaction(
+    async (txRepo) => {
+      const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+      if (current.status === 'arrived') return current;
+      if (!['booked', 'pending', 'waitlist'].includes(current.status ?? '')) {
+        throw new OperationOutcomeError(conflict('Only scheduled appointments can be checked in.'));
+      }
+      const start = current.start ? new Date(current.start).getTime() : Number.NaN;
+      const end = current.end ? new Date(current.end).getTime() : start + 60 * 60 * 1000;
+      const now = Date.now();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || now < start - 4 * 60 * 60 * 1000 || now > end) {
+        throw new OperationOutcomeError(conflict('Check-in is available from four hours before the appointment until it ends.'));
+      }
+      const checkInNote = {
+        time: new Date(now).toISOString(),
+        authorReference: { reference: `Practitioner/${practitionerId}` },
+        text: `Patient checked in${note ? `: ${note}` : '.'}`,
+      };
+      return txRepo.updateResource<Appointment>({
+        ...current,
+        status: 'arrived',
+        note: [...(current.note ?? []), checkInNote],
+      }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
+    },
+    { resourceTypes: ['Appointment', 'Practitioner'], source: 'appointment.checkIn' }
+  );
+  return [allOk, buildOutputParameters(checkInOperation, { return: appointment })];
 }
 
 /** Returns a bounded list of public availability and minimal provider identity for Patient booking. */

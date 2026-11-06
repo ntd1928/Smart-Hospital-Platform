@@ -603,6 +603,31 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function checkInAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!staff || !appointment.id) return;
+    const form = event.currentTarget;
+    const note = String(new FormData(form).get('checkInNote') ?? '').trim();
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+      ];
+      if (note) parameter.push({ name: 'note', valueString: note });
+      await client.post('fhir/R4/Appointment/$check-in', { resourceType: 'Parameters', parameter });
+      setMessage('Đã check-in bệnh nhân; trạng thái lịch chuyển sang arrived.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createAvailability(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1183,6 +1208,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   const canRecordOutcome =
                     ['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(appointment.status ?? '') &&
                     !!appointment.start && new Date(appointment.start) <= new Date();
+                  const checkInStart = appointment.start ? new Date(appointment.start).getTime() - 4 * 60 * 60 * 1000 : Number.NaN;
+                  const checkInEnd = appointment.end
+                    ? new Date(appointment.end).getTime()
+                    : appointment.start ? new Date(appointment.start).getTime() + 60 * 60 * 1000 : Number.NaN;
+                  const canCheckIn =
+                    staff && ['booked', 'pending', 'waitlist'].includes(appointment.status ?? '') &&
+                    Date.now() >= checkInStart && Date.now() <= checkInEnd;
                   return (
                     <tr key={appointment.id} data-resource-id={appointment.id}>
                       <td>
@@ -1204,8 +1236,23 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                       <td>
                         <span className="pill">{appointment.status}</span>
                       </td>
-                      <td>{appointment.comment || '—'}</td>
                       <td>
+                        {[appointment.comment, appointment.note?.map((item) => item.text).filter(Boolean).join(' · ')]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </td>
+                      <td>
+                          {canCheckIn && (
+                            <details>
+                              <summary>Check-in</summary>
+                              <form className="editor" onSubmit={(event) => void checkInAppointment(appointment, event)}>
+                                <label>Ghi chú quầy (không bắt buộc)
+                                  <textarea name="checkInNote" maxLength={500} rows={2} />
+                                </label>
+                                <button className="button primary" disabled={busy}>Xác nhận đã đến</button>
+                              </form>
+                            </details>
+                          )}
                           {canCancel && (
                             <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
                               {patientProfile ? 'Hủy lịch của tôi' : 'Hủy'}
