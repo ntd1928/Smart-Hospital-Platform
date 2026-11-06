@@ -1,7 +1,8 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Condition, Encounter, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
+import type { Appointment, Condition, Encounter, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { personName } from './access';
 import type { HospitalRole } from './access';
 
@@ -12,8 +13,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [encounters, setEncounters] = useState<Encounter[]>([]);
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [error, setError] = useState<unknown>();
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (role === 'Patient') return;
@@ -42,12 +46,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       client.searchResources('Encounter', { patient: patientReference, _count: '100', _sort: '-date' }),
       client.searchResources('Condition', { patient: patientReference, _count: '100', _sort: '-onset-date' }),
       client.searchResources('Observation', { patient: patientReference, _count: '100', _sort: '-date' }),
+      client.searchResources('Appointment', { patient: patientReference, _count: '100', _sort: '-date' }),
     ])
-      .then(([encounterResults, conditionResults, observationResults]) => {
+      .then(([encounterResults, conditionResults, observationResults, appointmentResults]) => {
         if (!live) return;
         setEncounters(encounterResults);
         setConditions(conditionResults);
         setObservations(observationResults);
+        setAppointments(appointmentResults);
       })
       .catch((e) => {
         if (live) setError(e);
@@ -59,6 +65,47 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       live = false;
     };
   }, [client, patientId]);
+
+  async function createEncounter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const start = new Date(`${String(data.get('encounterDate'))}T${String(data.get('encounterTime'))}`);
+    const reason = String(data.get('encounterReason')).trim();
+    if (!patientId || !reason || !Number.isFinite(start.getTime())) {
+      setError(new Error('Chọn bệnh nhân, thời gian và lý do khám hợp lệ.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const appointmentId = String(data.get('encounterAppointment') ?? '');
+      await client.createResource<Encounter>({
+        resourceType: 'Encounter',
+        status: 'in-progress',
+        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
+        subject: { reference: `Patient/${patientId}` },
+        appointment: appointmentId ? [{ reference: `Appointment/${appointmentId}` }] : undefined,
+        period: { start: start.toISOString() },
+        reasonCode: [{ text: reason }],
+      });
+      setMessage('Đã tạo lần khám.');
+      form.reset();
+      setLoading(true);
+      const updated = await client.searchResources('Encounter', {
+        patient: `Patient/${patientId}`,
+        _count: '100',
+        _sort: '-date',
+      });
+      setEncounters(updated);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+      setLoading(false);
+    }
+  }
 
   const selectedPatient = patients.find((patient) => patient.id === patientId);
   return (
@@ -85,7 +132,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <p className="muted">Hồ sơ của {personName(profile as Patient)}</p>
       )}
       {error && <div className="notice error" role="alert">{normalizeErrorString(error)}</div>}
+      {message && <div className="notice" role="status">{message}</div>}
       {loading ? <p className="muted">Đang tải hồ sơ…</p> : null}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createEncounter}>
+          <h2>Ghi nhận lần khám</h2>
+          <div className="form-grid">
+            <label>Ngày khám<input name="encounterDate" type="date" required /></label>
+            <label>Giờ khám<input name="encounterTime" type="time" required /></label>
+            <label>Appointment đã hoàn tất
+              <select name="encounterAppointment" defaultValue="">
+                <option value="">Không liên kết</option>
+                {appointments.filter((appointment) => appointment.status === 'fulfilled').map((appointment) => (
+                  <option key={appointment.id} value={appointment.id}>
+                    {appointment.start ? new Date(appointment.start).toLocaleString('vi-VN') : appointment.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="full-width">Lý do khám<input name="encounterReason" maxLength={200} required /></label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>
+              {saving ? 'Đang lưu…' : 'Tạo lần khám'}
+            </button>
+          </div>
+        </form>
+      )}
       <section className="panel">
         <h2>Lần khám</h2>
         {encounters.length ? (
