@@ -19,7 +19,7 @@ Backend là bản tách modular monolith Medplum. Chế độ demo chạy toàn 
 
 User chứa tài khoản và password bcrypt hash. ProjectMembership nối User, Project và profile. Practitioner là profile nhân viên; admin flag và AccessPolicy xác định quyền quản trị. Patient là hồ sơ bệnh nhân, có thể chưa có tài khoản. CRUD Patient không tự tạo User; invite Patient tạo User/profile/membership liên kết.
 
-Appointment.participant.actor tham chiếu Patient/Practitioner và Appointment.slot có thể tham chiếu Slot. Schedule gắn Slot với Practitioner; repository kiểm tra khoảng thời gian chồng lấn giữa Appointment của cùng Practitioner và giữa Slot trong cùng Schedule. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
+Appointment.participant.actor tham chiếu Patient/Practitioner và Appointment.slot có thể tham chiếu Slot. Schedule gắn Slot với Practitioner; repository kiểm tra khoảng thời gian chồng lấn giữa Appointment của cùng Practitioner và giữa Slot trên các Schedule active của cùng Practitioner, dùng transaction lock theo Practitioner. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
 
 Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR chưa triển khai.
 
