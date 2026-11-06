@@ -15,6 +15,7 @@ import {
   appointmentWaitlistHandler,
 } from './operations/appointments';
 import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
+import { encounterCompleteHandler } from './operations/encounters';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
@@ -77,6 +78,7 @@ router.add('POST', '/Appointment/$book', appointmentBookHandler);
 router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
 router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
 router.add('POST', '/Appointment/$start-encounter', appointmentStartEncounterHandler);
+router.add('POST', '/Encounter/$complete', encounterCompleteHandler);
 router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);
 router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);

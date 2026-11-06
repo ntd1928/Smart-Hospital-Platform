@@ -21,5 +21,6 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - Policy backend thu hẹp dữ liệu Patient/clinical cho Practitioner theo Patient.generalPractitioner; Admin quản lý phân công trong Patient editor. Chỉ dùng AccessPolicy đã có, không thay authorization bằng ẩn menu.
 - Patient tự cập nhật contact details qua policy FHIR; repository khôi phục read-only fields theo hiện hữu, kể cả giá trị falsy.
 - Appointment check-in được nối tới Encounter: staff bắt đầu Encounter từ lịch arrived/fulfilled qua transaction server-side có kiểm tra Practitioner được gán và chống tạo trùng.
+- Encounter completion dùng operation server-side có khóa theo Encounter, kiểm tra Practitioner được phân công/tham gia hoặc Admin, yêu cầu summary lâm sàng và ghi actor/thời điểm kết thúc cùng transaction.
 
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationAdministration, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner, Resource } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationAdministration, MedicationRequest, MedicationStatement, Observation, Parameters, Patient, Practitioner, Resource } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -233,8 +233,39 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function updateEncounterStatus(encounter: Encounter, status: 'finished' | 'cancelled') {
+  async function completeEncounter(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (!encounter.id || encounter.status !== 'in-progress') return;
+    const data = new FormData(event.currentTarget);
+    const summary = String(data.get('encounterCompletionSummary') ?? '').trim();
+    if (summary.length < 10) {
+      setError(new Error('Ghi phần tổng kết ít nhất 10 ký tự trước khi kết thúc lần khám.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$complete', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'summary', valueString: summary },
+        ],
+      });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the completed Encounter.');
+      setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã kết thúc lần khám và lưu tổng kết.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function cancelEncounter(encounter: Encounter) {
+    if (!encounter.id || encounter.status !== 'in-progress' || !window.confirm('Hủy lần khám đang mở?')) return;
     setSaving(true);
     setError(undefined);
     setMessage('');
@@ -245,11 +276,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       }
       const updated = await client.updateResource<Encounter>({
         ...encounter,
-        status,
+        status: 'cancelled',
         period: { ...encounter.period, end: end.toISOString() },
+        note: [...(encounter.note ?? []), {
+          time: end.toISOString(),
+          text: '[cancellation] Lần khám được nhân viên hủy.',
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
       });
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage(status === 'finished' ? 'Đã kết thúc lần khám.' : 'Đã hủy lần khám.');
+      setMessage('Đã hủy lần khám.');
     } catch (e) {
       setError(e);
     } finally {
@@ -1699,8 +1735,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <button className="button" disabled={saving}>Lưu ghi chú</button>
                     </form>
                   </details>
-                  <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'finished')}>Kết thúc</button>{' '}
-                  <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'cancelled')}>Hủy</button>
+                  <details>
+                    <summary>Kết thúc lần khám</summary>
+                    <form className="editor" onSubmit={(event) => void completeEncounter(encounter, event)}>
+                      <label>Tổng kết lần khám (bắt buộc)
+                        <textarea name="encounterCompletionSummary" maxLength={4000} minLength={10} rows={3} required placeholder="Kết quả, hướng xử trí và dặn dò khi kết thúc…" />
+                      </label>
+                      <button className="button primary" disabled={saving}>{saving ? 'Đang lưu…' : 'Lưu tổng kết và kết thúc'}</button>
+                    </form>
+                  </details>{' '}
+                  <button className="button" disabled={saving} onClick={() => void cancelEncounter(encounter)}>Hủy</button>
                 </>}</td>}
               </tr>
             ))}</tbody>

@@ -24,6 +24,8 @@ Bản tách dành cho database local mới; không hỗ trợ nâng cấp databa
 
 ## Kiểm chứng và phối hợp
 
+Khi kết thúc Encounter, staff gửi `$complete` với summary lâm sàng bắt buộc 10–4000 ký tự. Server khóa và xác minh Encounter đang mở, project và Practitioner được phân công/tham gia (hoặc Admin), rồi ghi summary có người thực hiện cùng thời điểm kết thúc trong một transaction.
+
 GitHub Issues/Projects quản lý công việc, owner, phụ thuộc và tiêu chí nghiệm thu; PR ghi kết quả test và giới hạn. Kiến trúc và cách chạy bắt buộc nằm trong repo, không phụ thuộc tài liệu riêng của một thành viên. Xem [CONTRIBUTING](../../CONTRIBUTING.md) và [phân loại tài liệu](DOCUMENTATION.md).
 
 CI được cấu hình cho pull request và push vào main/develop: quality gate trước, kiểm thử API/E2E trên PostgreSQL/Redis sau. Chưa có CD. Chỉ kết luận CI hosted đạt khi có run tương ứng trên GitHub; chạy local không thay thế bằng chứng đó. Xem [CI](CI.md).
