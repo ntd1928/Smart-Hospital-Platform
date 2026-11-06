@@ -276,6 +276,7 @@ export const PRACTITIONER_READONLY_RESOURCE_TYPES: ResourceType[] = [
   'MedicationAdministration',
   'Organization',
   'HealthcareService',
+  'PractitionerRole',
   'MedicationKnowledge',
   'PlanDefinition',
   'ActivityDefinition',

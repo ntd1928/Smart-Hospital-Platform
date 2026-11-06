@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { HealthcareService, Organization } from '@medplum/fhirtypes';
+import type { HealthcareService, Organization, Practitioner, PractitionerRole } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -8,6 +8,8 @@ export function DepartmentsPage(): React.ReactElement {
   const client = useMedplum();
   const [departments, setDepartments] = useState<Organization[]>([]);
   const [services, setServices] = useState<HealthcareService[]>([]);
+  const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const [practitionerRoles, setPractitionerRoles] = useState<PractitionerRole[]>([]);
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -15,12 +17,16 @@ export function DepartmentsPage(): React.ReactElement {
   const load = useCallback(async () => {
     setError(undefined);
     try {
-      const [organizationResults, serviceResults] = await Promise.all([
+      const [organizationResults, serviceResults, practitionerResults, roleResults] = await Promise.all([
         client.searchResources('Organization', { _count: '100', _sort: 'name' }),
         client.searchResources('HealthcareService', { _count: '100', _sort: 'name' }),
+        client.searchResources('Practitioner', { _count: '100', _sort: 'name' }),
+        client.searchResources('PractitionerRole', { _count: '100' }),
       ]);
       setDepartments(organizationResults);
       setServices(serviceResults);
+      setPractitioners(practitionerResults);
+      setPractitionerRoles(roleResults);
     } catch (e) {
       setError(e);
     }
@@ -166,6 +172,58 @@ export function DepartmentsPage(): React.ReactElement {
     }
   }
 
+  async function assignPractitioner(event: FormEvent<HTMLFormElement>, service: HealthcareService) {
+    event.preventDefault();
+    if (!service.id || !service.providedBy?.reference) return;
+    const form = event.currentTarget;
+    const practitionerId = String(new FormData(form).get('practitioner') ?? '');
+    if (!practitionerId) return;
+    const exists = practitionerRoles.some(
+      (role) => role.active !== false && role.practitioner?.reference === `Practitioner/${practitionerId}` &&
+        role.healthcareService?.some((reference) => reference.reference === `HealthcareService/${service.id}`)
+    );
+    if (exists) {
+      setError(new Error('Bác sĩ đã được phân công cho dịch vụ này.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const role = await client.createResource<PractitionerRole>({
+        resourceType: 'PractitionerRole',
+        active: true,
+        practitioner: { reference: `Practitioner/${practitionerId}` },
+        organization: service.providedBy,
+        healthcareService: [{ reference: `HealthcareService/${service.id}` }],
+      });
+      setPractitionerRoles((current) => [...current, role]);
+      form.reset();
+      setMessage('Đã phân công bác sĩ cho dịch vụ.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setPractitionerRoleActive(role: PractitionerRole) {
+    if (!role.id) return;
+    const active = role.active === false;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<PractitionerRole>({ ...role, active });
+      setPractitionerRoles((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(active ? 'Đã kích hoạt phân công.' : 'Đã ngừng phân công.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const activeDepartments = departments.filter((department) => department.active !== false);
   return (
     <>
@@ -239,6 +297,24 @@ export function DepartmentsPage(): React.ReactElement {
                   <button className="button secondary" disabled={busy} onClick={() => void setServiceActive(service)}>
                     {service.active === false ? 'Kích hoạt' : 'Ngừng'}
                   </button>
+                  <ul className="service-practitioners">
+                    {practitionerRoles.filter((role) => role.healthcareService?.some((reference) => reference.reference === `HealthcareService/${service.id}`)).map((role) => {
+                      const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === role.practitioner?.reference);
+                      return <li key={role.id}>{practitioner ? `${practitioner.name?.[0]?.given?.join(' ') ?? ''} ${practitioner.name?.[0]?.family ?? ''}`.trim() : role.practitioner?.display ?? role.practitioner?.reference}
+                        <span className={`pill ${role.active === false ? 'inactive' : ''}`}>{role.active === false ? 'Ngừng phân công' : 'Đang nhận khám'}</span>{' '}
+                        <button className="button secondary" disabled={busy} onClick={() => void setPractitionerRoleActive(role)}>{role.active === false ? 'Kích hoạt' : 'Ngừng phân công'}</button>
+                      </li>;
+                    })}
+                  </ul>
+                  <form className="toolbar assign-practitioner" onSubmit={(event) => void assignPractitioner(event, service)}>
+                    <label>Bác sĩ
+                      <select name="practitioner" required defaultValue="">
+                        <option value="" disabled>Chọn bác sĩ</option>
+                        {practitioners.filter((practitioner) => practitioner.active !== false).map((practitioner) => <option key={practitioner.id} value={practitioner.id}>{practitioner.name?.[0]?.given?.join(' ')} {practitioner.name?.[0]?.family}</option>)}
+                      </select>
+                    </label>
+                    <button className="button secondary" disabled={busy || service.active === false || !practitioners.some((practitioner) => practitioner.active !== false)}>Phân công</button>
+                  </form>
                 </li>
               ))}</ul> : <p className="muted">Chưa có dịch vụ được gắn với khoa này.</p>}
             </article>

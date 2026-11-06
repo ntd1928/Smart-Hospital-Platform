@@ -136,7 +136,7 @@ async function reconcilePractitionerRestrictedWritePolicy(systemRepo: SystemRepo
   if (!policyId) return;
   const policy = await systemRepo.readResource<AccessPolicy>('AccessPolicy', policyId);
   if (policy.name !== 'Default Practitioner Access Policy' || policy.meta?.project !== project.id) return;
-  const restrictedTypes = new Set(['MedicationAdministration', 'Organization', 'HealthcareService']);
+  const restrictedTypes = new Set(['MedicationAdministration', 'Organization', 'HealthcareService', 'PractitionerRole']);
   const resource = policy.resource?.filter((rule) => !restrictedTypes.has(rule.resourceType ?? ''));
   if (resource?.length === policy.resource?.length) return;
   await systemRepo.updateResource<AccessPolicy>({ ...policy, resource });

@@ -17,6 +17,7 @@ import { sendFhirResponse } from './response';
 export const SUPPORTED_FHIR_RESOURCES = [
   'Patient',
   'Practitioner',
+  'PractitionerRole',
   'Appointment',
   'Encounter',
   'Condition',
