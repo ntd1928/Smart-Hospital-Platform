@@ -22,6 +22,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
+  const [encounterSearch, setEncounterSearch] = useState('');
+  const [encounterStatusFilter, setEncounterStatusFilter] = useState('');
+  const [encounterFrom, setEncounterFrom] = useState('');
+  const [encounterTo, setEncounterTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -283,6 +287,19 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   }
 
   const selectedPatient = patients.find((patient) => patient.id === patientId);
+  const query = encounterSearch.trim().toLocaleLowerCase();
+  const filteredEncounters = encounters.filter((encounter) => {
+    const startDate = encounter.period?.start?.slice(0, 10) ?? '';
+    const searchableText = [
+      encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).join(' '),
+      encounter.note?.map((note) => note.text).join(' '),
+      encounter.appointment?.map((reference) => reference.display ?? reference.reference).join(' '),
+    ].join(' ').toLocaleLowerCase();
+    return (!query || searchableText.includes(query))
+      && (!encounterStatusFilter || encounter.status === encounterStatusFilter)
+      && (!encounterFrom || (startDate && startDate >= encounterFrom))
+      && (!encounterTo || (startDate && startDate <= encounterTo));
+  });
   return (
     <>
       <div className="page-heading">
@@ -403,10 +420,25 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       )}
       <section className="panel">
         <h2>Lần khám</h2>
+        <div className="form-grid">
+          <label className="full-width">Tìm theo lý do, ghi chú hoặc Appointment
+            <input value={encounterSearch} onChange={(event) => setEncounterSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái
+            <select value={encounterStatusFilter} onChange={(event) => setEncounterStatusFilter(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="in-progress">Đang khám</option>
+              <option value="finished">Đã hoàn tất</option>
+              <option value="cancelled">Đã hủy</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={encounterFrom} onChange={(event) => setEncounterFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={encounterTo} onChange={(event) => setEncounterTo(event.currentTarget.value)} /></label>
+        </div>
         {encounters.length ? (
           <div className="table-wrap"><table>
             <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th><th>Ghi chú diễn biến</th><th>Appointment</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
-            <tbody>{encounters.map((encounter) => (
+            <tbody>{filteredEncounters.map((encounter) => (
               <tr key={encounter.id}>
                 <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
@@ -431,6 +463,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             ))}</tbody>
           </table></div>
         ) : <p className="empty">{loading ? 'Đang tải…' : 'Chưa có lần khám trong phạm vi truy cập.'}</p>}
+        {encounters.length > 0 && filteredEncounters.length === 0 && <p className="empty">Không có lần khám phù hợp với bộ lọc.</p>}
       </section>
       <section className="panel">
         <h2>Chẩn đoán</h2>
