@@ -151,10 +151,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('conditionEncounter') ?? '');
+      const verificationStatus = String(data.get('conditionVerificationStatus') ?? 'confirmed');
       const condition = await client.createResource<Condition>({
         resourceType: 'Condition',
         clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'active' }] },
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'confirmed' }] },
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: verificationStatus }] },
         code: { text: code },
         subject: { reference: `Patient/${patientId}` },
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
@@ -286,6 +287,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h2>Ghi chẩn đoán</h2>
           <div className="form-grid">
             <label className="full-width">Chẩn đoán<input name="conditionCode" maxLength={200} required /></label>
+            <label>Xác minh
+              <select name="conditionVerificationStatus" defaultValue="confirmed">
+                <option value="confirmed">Đã xác nhận</option>
+                <option value="provisional">Tạm thời</option>
+                <option value="unconfirmed">Chưa xác minh</option>
+                <option value="differential">Chẩn đoán phân biệt</option>
+              </select>
+            </label>
             <label>Lần khám liên quan
               <select name="conditionEncounter" defaultValue="">
                 <option value="">Không liên kết</option>
@@ -364,13 +373,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Chẩn đoán</h2>
         {conditions.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Ngày giải quyết</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <thead><tr><th>Chẩn đoán</th><th>Trạng thái lâm sàng</th><th>Xác minh</th><th>Ngày giải quyết</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{conditions.map((condition) => {
             const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
             return (
               <tr key={condition.id}>
                 <td>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'}</td>
-                <td>{condition.clinicalStatus?.coding?.[0]?.code ?? condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
+                <td>{condition.clinicalStatus?.coding?.[0]?.code ?? '—'}</td>
+                <td>{condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
                 <td>{condition.abatementDateTime ? new Date(condition.abatementDateTime).toLocaleDateString('vi-VN') : condition.abatementPeriod?.end ? new Date(condition.abatementPeriod.end).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
                 {role !== 'Patient' && <td>{condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}</td>}
