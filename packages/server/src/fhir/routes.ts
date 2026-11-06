@@ -10,6 +10,7 @@ import {
   appointmentCancelHandler,
   appointmentRescheduleHandler,
 } from './operations/appointments';
+import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
@@ -22,6 +23,7 @@ export const SUPPORTED_FHIR_RESOURCES = [
   'Observation',
   'MedicationRequest',
   'MedicationStatement',
+  'MedicationAdministration',
   'AllergyIntolerance',
   'Schedule',
   'Slot',
@@ -68,6 +70,7 @@ router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
 router.add('POST', '/Appointment/$book', appointmentBookHandler);
 router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
+router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

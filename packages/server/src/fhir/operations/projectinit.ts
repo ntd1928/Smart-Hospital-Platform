@@ -238,6 +238,11 @@ async function createPatientCompartmentAccessPolicy(
       { resourceType: 'Immunization', criteria: 'Immunization?_compartment=%patient' },
       { resourceType: 'MedicationRequest', criteria: 'MedicationRequest?_compartment=%patient' },
       { resourceType: 'MedicationStatement', criteria: 'MedicationStatement?_compartment=%patient' },
+      {
+        resourceType: 'MedicationAdministration',
+        criteria: 'MedicationAdministration?_compartment=%patient',
+        interaction: ['read', 'search'],
+      },
       { resourceType: 'Observation', criteria: 'Observation?_compartment=%patient' },
       { resourceType: 'Procedure', criteria: 'Procedure?_compartment=%patient' },
       { resourceType: 'QuestionnaireResponse', criteria: 'QuestionnaireResponse?_compartment=%patient' },
@@ -263,11 +268,12 @@ async function createAdminAccessPolicy(
 }
 
 /**
- * Resource types that non-admin Practitioners can read but not edit. These are curated knowledge,
- * terminology, and conformance resources typically managed at the project/admin level rather than
- * by front-line users.
+ * Resource types that non-admin Practitioners can read but not edit directly. Some clinical writes
+ * are handled by validated operations, while curated knowledge and conformance resources are managed
+ * at the project/admin level.
  */
 export const PRACTITIONER_READONLY_RESOURCE_TYPES: ResourceType[] = [
+  'MedicationAdministration',
   'MedicationKnowledge',
   'PlanDefinition',
   'ActivityDefinition',

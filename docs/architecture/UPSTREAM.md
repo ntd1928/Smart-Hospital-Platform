@@ -10,11 +10,11 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 
 ## Điều chỉnh
 
-- App/router mở auth, invite quản trị, Patient/Practitioner, Appointment/Schedule/Slot và API Encounter/Condition/Observation/MedicationRequest/MedicationStatement/AllergyIntolerance; app có trang EHR cơ bản cho ghi/đọc resource, gồm kê thuốc, đối soát thuốc và dị ứng. Chưa có đầy đủ vòng đời EHR hoặc kiểm tra tương tác thuốc-dị ứng. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
+- App/router mở auth, invite quản trị, Patient/Practitioner, Appointment/Schedule/Slot và API Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance; app có trang EHR cơ bản cho ghi/đọc resource, gồm kê thuốc, ghi nhận lần dùng, đối soát thuốc và dị ứng. Chưa có đầy đủ vòng đời EHR hoặc kiểm tra tương tác thuốc-dị ứng. Không mở AI/Bot, bulk data, HL7/DICOM hoặc SCIM.
 - Repository giữ CRUD, policy, transaction, search, history; bỏ hook Bot pre-commit và background/subscription/WebSocket jobs. Không có worker giả thay thế.
 - Config chỉ giữ file/env; storage nội bộ chỉ filesystem; bỏ cloud config/storage/email SES. Tuần này chưa có API upload tài liệu.
 - Giữ chuỗi schema nền upstream để repository/search/validator làm việc đúng. Không giữ bộ data-upgrade/worker dành cho Medplum cũ. Chỉ hỗ trợ database local mới của dự án, không nâng cấp database Medplum đang vận hành.
-- Definitions, bảng schema và kiểu dùng chung còn có resource của các tuần sau. API whitelist mở Encounter/Condition/Observation/MedicationRequest/MedicationStatement/AllergyIntolerance và app có giao diện EHR cơ bản; form Encounter hỗ trợ tham chiếu Appointment đã hoàn tất; kiểm tra tương tác thuốc-dị ứng, tính nhất quán, upload tài liệu và các workflow lâm sàng đầy đủ chưa triển khai.
+- Definitions, bảng schema và kiểu dùng chung còn có resource của các tuần sau. API whitelist mở Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance và app có giao diện EHR cơ bản; form Encounter hỗ trợ tham chiếu Appointment đã hoàn tất; kiểm tra tương tác thuốc-dị ứng, tính nhất quán, upload tài liệu và các workflow lâm sàng đầy đủ chưa triển khai.
 - Lint tập trung code nhóm; code kế thừa được typecheck/build và kiểm thử tích hợp. Format có thể làm hash khác bản gốc dù logic giữ nguyên.
 
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

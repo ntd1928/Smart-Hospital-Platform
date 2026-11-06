@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationAdministration, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -45,6 +45,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [observations, setObservations] = useState<Observation[]>([]);
   const [medicationRequests, setMedicationRequests] = useState<MedicationRequest[]>([]);
   const [medicationStatements, setMedicationStatements] = useState<MedicationStatement[]>([]);
+  const [medicationAdministrations, setMedicationAdministrations] = useState<MedicationAdministration[]>([]);
   const [allergies, setAllergies] = useState<AllergyIntolerance[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [error, setError] = useState<unknown>();
@@ -127,6 +128,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       for await (const page of client.searchResourcePages('MedicationStatement', { patient: patientReference, _count: '100', _sort: '-date-asserted' })) results.push(...page);
       return results;
     })();
+    const medicationAdministrationResultsPromise = (async () => {
+      const results: MedicationAdministration[] = [];
+      for await (const page of client.searchResourcePages('MedicationAdministration', { patient: patientReference, _count: '100' })) results.push(...page);
+      return results;
+    })();
     const appointmentResultsPromise = (async () => {
       const results: Appointment[] = [];
       for await (const page of client.searchResourcePages('Appointment', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
@@ -139,9 +145,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       medicationRequestResultsPromise,
       allergyResultsPromise,
       medicationStatementResultsPromise,
+      medicationAdministrationResultsPromise,
       appointmentResultsPromise,
     ])
-      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, allergyResults, medicationStatementResults, appointmentResults]) => {
+      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, allergyResults, medicationStatementResults, medicationAdministrationResults, appointmentResults]) => {
         if (!live) return;
         setEncounters(encounterResults);
         setConditions(conditionResults);
@@ -149,6 +156,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         setMedicationRequests(medicationRequestResults);
         setAllergies(allergyResults);
         setMedicationStatements(medicationStatementResults);
+        setMedicationAdministrations(medicationAdministrationResults);
         setAppointments(appointmentResults);
       })
       .catch((e) => {
@@ -592,6 +600,65 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createMedicationAdministration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const requestId = String(data.get('administrationRequest') ?? '');
+    const request = medicationRequests.find((item) => item.id === requestId);
+    const enteredMedication = String(data.get('administrationMedication') ?? '').trim();
+    const medicationConcept = request?.medicationCodeableConcept;
+    const hasMedicationConcept = Boolean(medicationConcept?.text || medicationConcept?.coding?.length);
+    const medicationName = medicationConcept?.text ?? medicationConcept?.coding?.find((coding) => coding.display)?.display ?? request?.medicationReference?.display;
+    const medicationChoice = hasMedicationConcept
+      ? { medicationCodeableConcept: medicationConcept }
+      : request?.medicationReference?.reference
+        ? { medicationReference: request.medicationReference }
+        : { medicationCodeableConcept: { text: enteredMedication || medicationName } };
+    const doseValue = String(data.get('administrationDoseValue') ?? '').trim();
+    const doseUnit = String(data.get('administrationDoseUnit') ?? '').trim();
+    const route = String(data.get('administrationRoute') ?? '').trim();
+    const effective = String(data.get('administrationTime') ?? '');
+    const effectiveDate = new Date(effective);
+    const noteText = String(data.get('administrationNote') ?? '').trim();
+    if (!patientId || (!enteredMedication && !hasMedicationConcept && !request?.medicationReference?.reference) || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || !Number.isFinite(effectiveDate.getTime()) || effectiveDate.getTime() > Date.now()) {
+      setError(new Error('Chọn bệnh nhân, thuốc, thời điểm đã dùng và liều dùng hợp lệ.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const encounterId = String(data.get('administrationEncounter') ?? '');
+      const administration = await client.post('fhir/R4/MedicationAdministration/$record', {
+        resourceType: 'MedicationAdministration',
+        status: 'completed',
+        ...medicationChoice,
+        subject: { reference: `Patient/${patientId}` },
+        effectiveDateTime: effectiveDate.toISOString(),
+        request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
+        context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        performer: profile.resourceType === 'Practitioner' && profile.id
+          ? [{ actor: { reference: `Practitioner/${profile.id}` } }]
+          : undefined,
+        dosage: doseValue || route
+          ? {
+              dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
+              route: route ? { text: route } : undefined,
+            }
+          : undefined,
+        note: noteText ? [{ text: noteText, time: new Date().toISOString(), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
+      }) as MedicationAdministration;
+      setMedicationAdministrations((current) => [administration, ...current]);
+      setMessage('Đã ghi nhận lần dùng thuốc thực tế.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createMedicationStatement(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -893,6 +960,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       if (match && !medicationRequestIds.has(match[1])) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
     }
   }
+  for (const administration of medicationAdministrations) {
+    checkEncounterReference('MedicationAdministration', administration.id, administration.context?.reference);
+    const match = /^MedicationRequest\/([^/]+)$/.exec(administration.request?.reference ?? '');
+    if (match && !medicationRequestIds.has(match[1])) {
+      ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+    }
+  }
   const activeAllergies = allergies.filter((allergy) =>
     allergy.clinicalStatus?.coding?.[0]?.code === 'active' &&
     !['refuted', 'entered-in-error'].includes(allergy.verificationStatus?.coding?.[0]?.code ?? '')
@@ -953,6 +1027,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setObservations([]);
     setMedicationRequests([]);
     setMedicationStatements([]);
+    setMedicationAdministrations([]);
     setAllergies([]);
     setAppointments([]);
     setEncounterSearch('');
@@ -1195,6 +1270,39 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu yêu cầu thuốc'}</button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createMedicationAdministration}>
+          <h2>Ghi nhận dùng thuốc</h2>
+          <p className="muted">Lưu lần dùng thuốc đã thực hiện, có thể liên kết đơn kê và lần khám.</p>
+          <div className="form-grid">
+            <label>Liên kết đơn kê
+              <select name="administrationRequest" defaultValue="">
+                <option value="">Ghi thuốc ngoài danh sách đơn kê</option>
+                {medicationRequests.filter((request) => request.status === 'active').map((request) => (
+                  <option key={request.id} value={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? request.id}</option>
+                ))}
+              </select>
+            </label>
+            <label>Tên thuốc<input name="administrationMedication" maxLength={200} placeholder="Bắt buộc nếu không chọn đơn kê" /></label>
+            <label>Thời điểm dùng<input name="administrationTime" type="datetime-local" defaultValue={localDateTimeInput(new Date().toISOString())} required /></label>
+            <label>Liều đã dùng<input name="administrationDoseValue" type="number" min="0.001" step="any" /></label>
+            <label>Đơn vị liều<input name="administrationDoseUnit" maxLength={40} placeholder="mg, viên, ml…" /></label>
+            <label>Đường dùng<input name="administrationRoute" maxLength={100} placeholder="uống, tiêm…" /></label>
+            <label>Lần khám liên quan
+              <select name="administrationEncounter" defaultValue="">
+                <option value="">Không liên kết</option>
+                {encounters.map((encounter) => (
+                  <option key={encounter.id} value={encounter.id}>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : encounter.id}</option>
+                ))}
+              </select>
+            </label>
+            <label className="full-width">Ghi chú<textarea name="administrationNote" maxLength={500} rows={2} /></label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Ghi nhận đã dùng'}</button>
           </div>
         </form>
       )}
@@ -1588,6 +1696,30 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             );
           })}</tbody>
         </table></div> : <p className="empty">{medicationRequests.length ? 'Không có đơn thuốc phù hợp với bộ lọc.' : 'Chưa có đơn thuốc trong phạm vi truy cập.'}</p>}
+      </section>
+      <section className="panel">
+        <h2>Lịch sử dùng thuốc đã ghi nhận</h2>
+        {medicationAdministrations.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Thời điểm</th><th>Thuốc</th><th>Liều</th><th>Đường dùng</th><th>Trạng thái</th><th>Đơn kê</th><th>Lần khám</th><th>Người ghi nhận</th><th>Ghi chú</th></tr></thead>
+          <tbody>{medicationAdministrations.map((administration) => {
+            const request = medicationRequests.find((item) => administration.request?.reference === `MedicationRequest/${item.id}`);
+            const encounter = encounters.find((item) => administration.context?.reference === `Encounter/${item.id}`);
+            const dose = administration.dosage?.dose;
+            return (
+              <tr key={administration.id}>
+                <td>{administration.effectiveDateTime ? new Date(administration.effectiveDateTime).toLocaleString('vi-VN') : administration.effectivePeriod?.start ? new Date(administration.effectivePeriod.start).toLocaleString('vi-VN') : '—'}</td>
+                <td>{administration.medicationCodeableConcept?.text ?? administration.medicationCodeableConcept?.coding?.[0]?.display ?? administration.medicationReference?.display ?? '—'}</td>
+                <td>{dose ? `${dose.value ?? ''} ${dose.unit ?? ''}`.trim() : '—'}</td>
+                <td>{administration.dosage?.route?.text ?? administration.dosage?.route?.coding?.[0]?.display ?? '—'}</td>
+                <td>{administration.status}</td>
+                <td>{request?.medicationCodeableConcept?.text ?? request?.medicationCodeableConcept?.coding?.[0]?.display ?? administration.request?.display ?? administration.request?.reference ?? '—'}</td>
+                <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : administration.context?.display ?? administration.context?.reference ?? '—'}</td>
+                <td>{administration.performer?.map((performer) => performer.actor?.display ?? performer.actor?.reference).filter(Boolean).join(', ') || '—'}</td>
+                <td>{administration.note?.map((note) => note.text).filter(Boolean).join('; ') || '—'}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table></div> : <p className="empty">Chưa có lần dùng thuốc được ghi nhận.</p>}
       </section>
       <section className="panel">
         <h2>Lịch sử dị ứng</h2>

@@ -21,6 +21,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; EHR có tóm tắt hồ sơ để in từ tài nguyên đã tải; ghi chú Encounter có loại diễn biến/đánh giá/kế hoạch/thủ thuật; Observation cho staff sửa kết quả sang amended hoặc đánh dấu entered-in-error kèm lý do/audit note; rà soát tham chiếu trong hồ sơ đã tải; cập nhật Encounter/Condition có audit note; quyền do policy/compartment kiểm tra |
 | /fhir/R4/MedicationRequest                      | CRUD/search yêu cầu thuốc; app lưu liều, đường dùng, tần suất có cấu trúc; so tên thuốc dạng văn bản với dị ứng thuốc đang hoạt động, lưu kết quả rà soát vào audit note, chuyển trạng thái có lý do và đánh dấu entered-in-error |
 | /fhir/R4/MedicationStatement                    | CRUD/search đối soát thuốc; lưu liều khai báo có cấu trúc, nguồn bệnh nhân/nhân viên, liên kết đơn kê và audit note theo Patient compartment |
+| /fhir/R4/MedicationAdministration               | Staff ghi nhận qua `$record`; backend kiểm tra Patient/đơn kê/Encounter, gắn Practitioner đã xác thực và ghi audit; Patient chỉ đọc lịch sử trong compartment |
 | /fhir/R4/AllergyIntolerance                     | CRUD/search; staff review xác nhận/bác bỏ, kết thúc theo trạng thái; Patient compartment theo policy mặc định |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 
@@ -28,7 +29,7 @@ POST `/fhir/R4` nhận FHIR transaction Bundle nếu mọi entry thuộc resourc
 
 Giao diện `/appointments` dùng FHIR API: Admin/Doctor đặt lịch cho Patient đã chọn; Patient xem lịch tương lai trong 90 ngày, chỉ nhận thông tin cơ bản về Slot/Schedule/Practitioner còn hoạt động và tự đặt/hủy/đổi lịch bằng các operation Patient-scoped. `$book` xác minh profile Patient, Slot còn trống, Schedule/Practitioner còn hoạt động và xung đột Appointment; việc đánh dấu Slot `busy` và tạo Appointment chạy trong một transaction server-side. `$cancel` xác minh Appointment thuộc Patient đang đăng nhập, chỉ cho hủy lịch tương lai ở trạng thái có thể hủy và giải phóng Slot cùng transaction. `$reschedule` xác minh Appointment của Patient đang đăng nhập, chuyển sang một Slot còn trống và giải phóng Slot cũ trong cùng transaction. Patient không được cấp quyền FHIR trực tiếp để tạo Appointment hoặc sửa Slot. Admin/Doctor có thể tạo Slot một lần trong Schedule của bác sĩ. Repository từ chối create/update Appointment có khoảng thời gian giao nhau và tuần tự hóa thao tác theo Practitioner trong transaction.
 
-Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng và đã mở Encounter, Condition, Observation, MedicationRequest, MedicationStatement, AllergyIntolerance. App hỗ trợ kê thuốc, đối soát thuốc đang dùng và ghi nhận dị ứng; Patient compartment dùng policy mặc định; chưa triển khai đầy đủ workflow EHR; Bot và $ai chưa mở.
+Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng và đã mở Encounter, Condition, Observation, MedicationRequest, MedicationStatement, MedicationAdministration, AllergyIntolerance. App hỗ trợ kê thuốc, ghi nhận liều đã dùng, đối soát thuốc đang dùng và ghi nhận dị ứng; Patient compartment dùng policy mặc định; chưa triển khai đầy đủ workflow EHR; Bot và $ai chưa mở.
 
 ```ts
 const patient = await medplum.createResource({
