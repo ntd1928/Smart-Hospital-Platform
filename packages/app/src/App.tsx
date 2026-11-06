@@ -674,7 +674,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form className="panel editor" onSubmit={createAvailability}>
           <h2>Thêm khung giờ trống</h2>
-          <p className="muted">Tạo một Slot trong Schedule của bác sĩ; khung giờ lặp chưa được hỗ trợ.</p>
+          <p className="muted">Tạo một Slot riêng trong Schedule của bác sĩ.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
