@@ -109,6 +109,7 @@ import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
 import {
   findAppointmentConflict,
+  findAppointmentConflictForSlot,
   findActiveAppointmentForSlot,
   findAppointmentForSlot,
   findSlotConflict,
@@ -1048,6 +1049,21 @@ export class Repository extends FhirRepository implements Disposable {
       }
       if (!schedule.actor?.some((actor) => actor.reference?.startsWith('Practitioner/'))) {
         throw new OperationOutcomeError(badRequest('Schedule must reference a Practitioner before it can contain Slots.'));
+      }
+      const practitionerReferences = schedule.actor
+        .map((actor) => actor.reference)
+        .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false);
+      if (await findAppointmentConflictForSlot(this, slot, practitionerReferences)) {
+        throw new OperationOutcomeError({
+          resourceType: 'OperationOutcome',
+          issue: [
+            {
+              severity: 'error',
+              code: 'conflict',
+              details: { text: 'Slot overlaps an active Appointment for this Practitioner.' },
+            },
+          ],
+        });
       }
     }
     if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
