@@ -11,8 +11,9 @@ import {
   parseSearchRequest,
 } from '@medplum/core';
 import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
-import type { Appointment, Bundle, HealthcareService, Organization, Practitioner, PractitionerRole, Reference, Schedule, Slot } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, HealthcareService, Organization, Patient, Practitioner, PractitionerRole, Reference, Schedule, Slot } from '@medplum/fhirtypes';
 import { getAuthenticatedContext } from '../../context';
+import { DatabaseMode } from '../../database';
 import { findActiveAppointmentForSlot, findAppointmentConflict } from '../appointment-conflicts';
 import type { SystemRepository } from '../repo';
 import { makeOperationDefinition } from './definitions';
@@ -79,6 +80,32 @@ const checkInOperation = makeOperationDefinition(
   }
 );
 
+const waitlistOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-waitlist',
+    code: 'waitlist',
+    parameter: [
+      param('in', 'service', 'Reference', 1, '1'),
+      param('in', 'description', 'string', 0, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
+const offerWaitlistOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-offer-waitlist',
+    code: 'offer-waitlist',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'slot', 'Reference', 1, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 interface BookParameters {
   slot: Reference;
   description?: string;
@@ -101,6 +128,127 @@ interface RescheduleParameters {
 interface CheckInParameters {
   appointment: Reference;
   note?: string;
+}
+
+interface WaitlistParameters {
+  service: Reference;
+  description?: string;
+}
+
+interface OfferWaitlistParameters {
+  appointment: Reference;
+  slot: Reference;
+}
+
+/** Creates one Patient waitlist Appointment per active HealthcareService. */
+export async function appointmentWaitlistHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const patientId = getPatientId();
+  const params = parseInputParameters<WaitlistParameters>(waitlistOperation, req);
+  const serviceId = getHealthcareServiceId(params.service);
+  if (!serviceId) return [badRequest('A HealthcareService reference is required.')];
+  const description = params.description?.trim();
+  if (description && description.length > 200) return [badRequest('Description must be 200 characters or fewer.')];
+
+  const appointment = await ctx.systemRepo.ensureInTransaction(
+    async (txRepo) => {
+      await txRepo.executeRawSql(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`${ctx.project.id}:Appointment:waitlist:${patientId}:${serviceId}`],
+        { resourceTypes: 'Appointment', operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.waitlistLock' }
+      );
+      const patient = await txRepo.readResource<Patient>('Patient', patientId);
+      if (patient.active === false) throw new OperationOutcomeError(forbidden('Inactive Patients cannot join a waitlist.'));
+      const service = await txRepo.readResource<HealthcareService>('HealthcareService', serviceId);
+      if (service.meta?.project !== ctx.project.id || service.active === false || !(await hasActiveProviderForService(txRepo, service, ctx.project.id))) {
+        throw new OperationOutcomeError(conflict('The selected HealthcareService is not accepting waitlist requests.'));
+      }
+      const existing = await txRepo.search<Appointment>(parseSearchRequest<Appointment>(
+        `Appointment?actor=Patient/${encodeURIComponent(patientId)}&status=waitlist&_count=100`
+      ));
+      const duplicate = (existing.entry ?? []).map((entry) => entry.resource).find((resource) =>
+        resource?.meta?.project === ctx.project.id &&
+        resource.participant?.some((participant) => participant.actor?.reference === `HealthcareService/${serviceId}`)
+      );
+      if (duplicate) return duplicate as Appointment;
+      const serviceType = service.type?.length ? service.type : [{ text: service.name }];
+      return txRepo.createResource<Appointment>({
+        resourceType: 'Appointment',
+        meta: { project: ctx.project.id },
+        status: 'waitlist',
+        description: description || undefined,
+        serviceType,
+        participant: [
+          { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
+          { actor: { reference: `HealthcareService/${serviceId}` }, status: 'accepted' },
+        ],
+      });
+    },
+    { resourceTypes: ['Appointment', 'HealthcareService', 'PractitionerRole', 'Practitioner', 'Organization', 'Patient'], source: 'appointment.waitlist' }
+  );
+  return [allOk, buildOutputParameters(waitlistOperation, { return: appointment })];
+}
+
+/** Assigns a waiting Patient to a free Slot in their selected service atomically. */
+export async function appointmentOfferWaitlistHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const staffPractitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!staffPractitionerId) throw new OperationOutcomeError(forbidden('Only authenticated Practitioner staff may assign waitlist appointments.'));
+  const params = parseInputParameters<OfferWaitlistParameters>(offerWaitlistOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  const slotId = /^Slot\/([^/]+)$/.exec(params.slot.reference ?? '')?.[1];
+  if (!appointmentId || !slotId) return [badRequest('Appointment and Slot references are required.')];
+  const staffPractitioner = await ctx.systemRepo.readResource<Practitioner>('Practitioner', staffPractitionerId);
+  if (staffPractitioner.active === false) throw new OperationOutcomeError(forbidden('Inactive Practitioners cannot assign appointments.'));
+
+  const appointment = await ctx.repo.ensureInTransaction(
+    async (txRepo) => {
+      const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+      if (current.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Waitlist Appointment belongs to another project.'));
+      if (current.status !== 'waitlist') throw new OperationOutcomeError(conflict('The Appointment is no longer waiting.'));
+      const patientParticipant = current.participant?.find((participant) => participant.actor?.reference?.startsWith('Patient/'));
+      const serviceId = current.participant?.map((participant) => getHealthcareServiceId(participant.actor)).find(Boolean);
+      if (!patientParticipant?.actor || !serviceId) throw new OperationOutcomeError(badRequest('Waitlist Appointment must reference a Patient and HealthcareService.'));
+      const slot = await txRepo.readResource<Slot>('Slot', slotId);
+      if (slot.meta?.project !== ctx.project.id || slot.status !== 'free' || !isFutureInterval(slot)) throw new OperationOutcomeError(conflict('The selected Slot is no longer available.'));
+      const scheduleId = /^Schedule\/([^/]+)$/.exec(slot.schedule?.reference ?? '')?.[1];
+      if (!scheduleId) throw new OperationOutcomeError(badRequest('The Slot is not attached to a valid Schedule.'));
+      const schedule = await txRepo.readResource<Schedule>('Schedule', scheduleId);
+      if (schedule.meta?.project !== ctx.project.id || schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
+      const practitionerRefs = schedule.actor?.map((actor) => actor.reference)
+        .filter((reference): reference is string => /^Practitioner\/[^/]+$/.test(reference ?? ''));
+      if (practitionerRefs?.length !== 1) throw new OperationOutcomeError(badRequest('The Schedule must have exactly one Practitioner.'));
+      const practitionerId = practitionerRefs[0].slice('Practitioner/'.length);
+      const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
+      if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false || !(await isAssignedToService(txRepo, practitionerId, serviceId, ctx.project.id))) {
+        throw new OperationOutcomeError(conflict('The selected Practitioner is not available for this HealthcareService.'));
+      }
+      if (await findActiveAppointmentForSlot(txRepo, slotId)) throw new OperationOutcomeError(conflict('The Slot is already assigned.'));
+      const updated: Appointment = {
+        ...current,
+        status: 'booked',
+        start: slot.start,
+        end: slot.end,
+        slot: [{ reference: `Slot/${slotId}` }],
+        participant: [
+          { ...patientParticipant, status: 'accepted' },
+          ...(current.participant ?? []).filter((participant) => getHealthcareServiceId(participant.actor) === serviceId),
+          { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
+        ],
+        note: [...(current.note ?? []), {
+          time: new Date().toISOString(),
+          authorReference: { reference: `Practitioner/${staffPractitionerId}` },
+          text: 'Yêu cầu chờ đã được ghép với khung giờ trống.',
+        }],
+      };
+      const conflictAppointment = await findAppointmentConflict(txRepo, updated, current.id);
+      if (conflictAppointment) throw new OperationOutcomeError(conflict('The Practitioner has an overlapping Appointment.'));
+      await txRepo.updateResource({ ...slot, status: 'busy' });
+      return txRepo.updateResource<Appointment>(updated, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
+    },
+    { resourceTypes: ['Appointment', 'Slot', 'Schedule', 'Practitioner', 'PractitionerRole', 'HealthcareService', 'Organization'], source: 'appointment.offerWaitlist' }
+  );
+  return [allOk, buildOutputParameters(offerWaitlistOperation, { return: appointment })];
 }
 
 /** Marks an upcoming appointment as arrived and records the authenticated staff member. */
@@ -132,7 +280,7 @@ export async function appointmentCheckInHandler(req: FhirRequest): Promise<FhirR
       const checkInNote = {
         time: new Date(now).toISOString(),
         authorReference: { reference: `Practitioner/${practitionerId}` },
-        text: `Patient checked in${note ? `: ${note}` : '.'}`,
+        text: `Bệnh nhân đã đến${note ? `: ${note}` : '.'}`,
       };
       return txRepo.updateResource<Appointment>({
         ...current,
@@ -159,7 +307,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
   const matches = await ctx.systemRepo.search<Slot>(search);
   const slots = (matches.entry ?? [])
     .map((entry) => entry.resource)
-    .filter((resource): resource is Slot => resource?.resourceType === 'Slot');
+    .filter((resource): resource is Slot => resource?.resourceType === 'Slot' && resource.meta?.project === ctx.project.id);
   const schedules = new Map<string, Schedule>();
   const practitioners = new Map<string, Practitioner>();
   const entries: NonNullable<Bundle['entry']> = [];
@@ -173,6 +321,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
     async (role) => { roles.push(role); }
   );
   for (const role of roles) {
+    if (role.meta?.project !== ctx.project.id) continue;
     const practitionerId = /^Practitioner\/([^/]+)$/.exec(role.practitioner?.reference ?? '')?.[1];
     if (!practitionerId || role.active === false) continue;
     const current = roleByPractitioner.get(practitionerId) ?? [];
@@ -185,7 +334,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
           if (isNotFound(normalizeOperationOutcome(error))) return undefined;
           throw error;
         });
-        if (service && service.active !== false) serviceById.set(serviceId, service);
+        if (service && service.active !== false && service.meta?.project === ctx.project.id) serviceById.set(serviceId, service);
       }
     }
   }
@@ -196,7 +345,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
       if (isNotFound(normalizeOperationOutcome(error))) return undefined;
       throw error;
     });
-    if (!department || department.active === false) continue;
+    if (!department || department.active === false || department.meta?.project !== ctx.project.id) continue;
     const assignedRoles = roles.filter((role) =>
       role.organization?.reference === service.providedBy?.reference &&
       role.healthcareService?.some((reference) => getHealthcareServiceId(reference) === serviceId)
@@ -209,7 +358,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
         if (isNotFound(normalizeOperationOutcome(error))) return undefined;
         throw error;
       });
-      if (practitioner && practitioner.active !== false) hasActiveProvider = true;
+      if (practitioner && practitioner.active !== false && practitioner.meta?.project === ctx.project.id) hasActiveProvider = true;
     }
     if (hasActiveProvider) {
       publicServiceIds.add(serviceId);
@@ -227,7 +376,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
         if (isNotFound(normalizeOperationOutcome(error))) return undefined;
         throw error;
       });
-      if (!schedule) continue;
+      if (!schedule || schedule.meta?.project !== ctx.project.id) continue;
       schedules.set(scheduleId, schedule);
     }
     if (schedule.active === false) continue;
@@ -242,7 +391,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
         if (isNotFound(normalizeOperationOutcome(error))) return undefined;
         throw error;
       });
-      if (!practitioner) continue;
+      if (!practitioner || practitioner.meta?.project !== ctx.project.id) continue;
       practitioners.set(practitionerId, practitioner);
     }
     if (practitioner.active === false) continue;
@@ -283,6 +432,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
   );
   for (const entry of patientAppointments.entry ?? []) {
     const appointment = entry.resource;
+    if (appointment?.meta?.project !== ctx.project.id) continue;
     const practitionerId = appointment?.participant
       ?.map((participant) => /^Practitioner\/([^/]+)$/.exec(participant.actor?.reference ?? '')?.[1])
       .find((id): id is string => Boolean(id));
@@ -291,7 +441,7 @@ export async function appointmentAvailableHandler(req: FhirRequest): Promise<Fhi
       if (isNotFound(normalizeOperationOutcome(error))) return undefined;
       throw error;
     });
-    if (!practitioner) continue;
+    if (!practitioner || practitioner.meta?.project !== ctx.project.id) continue;
     included.add(`Practitioner/${practitionerId}`);
     entries.push({ resource: toPublicPractitioner(practitioner) });
   }
@@ -315,13 +465,13 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
   const appointment = await ctx.systemRepo.ensureInTransaction(
     async (txRepo) => {
       const slot = await txRepo.readResource<Slot>('Slot', slotId);
-      if (slot.status !== 'free' || !isFutureInterval(slot)) {
+      if (slot.meta?.project !== ctx.project.id || slot.status !== 'free' || !isFutureInterval(slot)) {
         throw new OperationOutcomeError(conflict('The selected Slot is no longer available.'));
       }
       const scheduleId = /^Schedule\/([^/]+)$/.exec(slot.schedule?.reference ?? '')?.[1];
       if (!scheduleId) throw new OperationOutcomeError(badRequest('The Slot is not attached to a valid Schedule.'));
       const schedule = await txRepo.readResource<Schedule>('Schedule', scheduleId);
-      if (schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
+      if (schedule.meta?.project !== ctx.project.id || schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
       const practitionerRefs = schedule.actor
         ?.map((actor) => actor.reference)
         .filter((reference): reference is string => /^Practitioner\/[^/]+$/.test(reference ?? ''));
@@ -330,9 +480,9 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
       }
       const practitionerId = practitionerRefs[0].slice('Practitioner/'.length);
       const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
-      if (practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
+      if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
       let healthcareService: HealthcareService | undefined;
-      if (serviceId && !(await isAssignedToService(txRepo, practitionerId, serviceId))) {
+      if (serviceId && !(await isAssignedToService(txRepo, practitionerId, serviceId, ctx.project.id))) {
         throw new OperationOutcomeError(conflict('The Practitioner is not assigned to the selected HealthcareService.'));
       }
       if (serviceId) healthcareService = await txRepo.readResource<HealthcareService>('HealthcareService', serviceId);
@@ -347,6 +497,7 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
           : undefined;
       const newAppointment: Appointment = {
         resourceType: 'Appointment',
+        meta: { project: ctx.project.id },
         status: 'booked',
         description: description || undefined,
         serviceType,
@@ -356,6 +507,7 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
         participant: [
           { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
           { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
+          ...(serviceId ? [{ actor: { reference: `HealthcareService/${serviceId}` }, status: 'accepted' as const }] : []),
         ],
       };
       const conflictAppointment = await findAppointmentConflict(txRepo, newAppointment);
@@ -386,8 +538,9 @@ export async function appointmentCancelHandler(req: FhirRequest): Promise<FhirRe
       );
       if (!belongsToPatient) throw new OperationOutcomeError(forbidden('Patients may only cancel their own Appointments.'));
       const cancellable = ['proposed', 'pending', 'booked', 'waitlist'].includes(current.status ?? '');
+      const unscheduledWaitlist = current.status === 'waitlist' && !current.start && !current.slot?.length;
       const start = current.start ? new Date(current.start).getTime() : Number.NaN;
-      if (!cancellable || !Number.isFinite(start) || start <= Date.now()) {
+      if (!cancellable || (!unscheduledWaitlist && (!Number.isFinite(start) || start <= Date.now()))) {
         throw new OperationOutcomeError(badRequest('Only future scheduled Appointments can be cancelled.'));
       }
 
@@ -438,13 +591,13 @@ export async function appointmentRescheduleHandler(req: FhirRequest): Promise<Fh
       if (oldSlotIds[0] === newSlotId) throw new OperationOutcomeError(badRequest('Choose a different Slot.'));
 
       const newSlot = await txRepo.readResource<Slot>('Slot', newSlotId);
-      if (newSlot.status !== 'free' || !isFutureInterval(newSlot)) {
+      if (newSlot.meta?.project !== ctx.project.id || newSlot.status !== 'free' || !isFutureInterval(newSlot)) {
         throw new OperationOutcomeError(conflict('The selected Slot is no longer available.'));
       }
       const scheduleId = /^Schedule\/([^/]+)$/.exec(newSlot.schedule?.reference ?? '')?.[1];
       if (!scheduleId) throw new OperationOutcomeError(badRequest('The Slot is not attached to a valid Schedule.'));
       const schedule = await txRepo.readResource<Schedule>('Schedule', scheduleId);
-      if (schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
+      if (schedule.meta?.project !== ctx.project.id || schedule.active === false) throw new OperationOutcomeError(conflict('The Schedule is no longer active.'));
       const practitionerRefs = schedule.actor
         ?.map((actor) => actor.reference)
         .filter((reference): reference is string => /^Practitioner\/[^/]+$/.test(reference ?? ''));
@@ -453,7 +606,11 @@ export async function appointmentRescheduleHandler(req: FhirRequest): Promise<Fh
       }
       const practitionerId = practitionerRefs[0].slice('Practitioner/'.length);
       const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
-      if (practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
+      if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
+      const serviceId = current.participant?.map((participant) => getHealthcareServiceId(participant.actor)).find(Boolean);
+      if (serviceId && !(await isAssignedToService(txRepo, practitionerId, serviceId, ctx.project.id))) {
+        throw new OperationOutcomeError(conflict('The selected Practitioner is not assigned to this Appointment service.'));
+      }
       if (await findActiveAppointmentForSlot(txRepo, newSlotId)) {
         throw new OperationOutcomeError(conflict('An active Appointment already references this Slot.'));
       }
@@ -547,25 +704,50 @@ function toPublicHealthcareService(service: HealthcareService): HealthcareServic
   };
 }
 
-async function isAssignedToService(repo: SystemRepository, practitionerId: string, serviceId: string): Promise<boolean> {
+async function isAssignedToService(repo: SystemRepository, practitionerId: string, serviceId: string, projectId: string): Promise<boolean> {
   const service = await repo.readResource<HealthcareService>('HealthcareService', serviceId);
-  if (service.active === false) return false;
+  if (service.active === false || service.meta?.project !== projectId) return false;
   const departmentId = /^Organization\/([^/]+)$/.exec(service.providedBy?.reference ?? '')?.[1];
   if (!departmentId) return false;
   const department = await repo.readResource<Organization>('Organization', departmentId);
-  if (department.active === false) return false;
+  if (department.active === false || department.meta?.project !== projectId) return false;
   let assigned = false;
   await repo.processAllResources<PractitionerRole>(
     { resourceType: 'PractitionerRole', practitioner: `Practitioner/${practitionerId}`, active: 'true' },
     async (role) => {
       if (
         role.active !== false &&
+        role.meta?.project === projectId &&
         role.organization?.reference === service.providedBy?.reference &&
         role.healthcareService?.some((reference) => getHealthcareServiceId(reference) === serviceId)
       ) {
-        assigned = true;
+        const practitioner = await repo.readResource<Practitioner>('Practitioner', practitionerId);
+        if (practitioner.active !== false && practitioner.meta?.project === projectId) assigned = true;
       }
     }
   );
   return assigned;
+}
+
+async function hasActiveProviderForService(repo: SystemRepository, service: HealthcareService, projectId: string): Promise<boolean> {
+  if (service.meta?.project !== projectId) return false;
+  const departmentId = /^Organization\/([^/]+)$/.exec(service.providedBy?.reference ?? '')?.[1];
+  if (!departmentId) return false;
+  const department = await repo.readResource<Organization>('Organization', departmentId);
+  if (department.active === false || department.meta?.project !== projectId) return false;
+  let hasProvider = false;
+  await repo.processAllResources<PractitionerRole>(
+    { resourceType: 'PractitionerRole', active: 'true' },
+    async (role) => {
+      if (
+        hasProvider || role.meta?.project !== projectId || role.active === false || role.organization?.reference !== service.providedBy?.reference ||
+        !role.healthcareService?.some((reference) => getHealthcareServiceId(reference) === service.id)
+      ) return;
+      const practitionerId = /^Practitioner\/([^/]+)$/.exec(role.practitioner?.reference ?? '')?.[1];
+      if (!practitionerId) return;
+      const practitioner = await repo.readResource<Practitioner>('Practitioner', practitionerId);
+      if (practitioner.active !== false && practitioner.meta?.project === projectId) hasProvider = true;
+    }
+  );
+  return hasProvider;
 }

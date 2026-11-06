@@ -12,7 +12,7 @@ Admin: project-admin Practitioner. Doctor: Practitioner với policy mặc đị
 
 Admin quản lý membership tại `/users`: tìm theo tên/email, cấp/hạ vai trò Admin cho Practitioner và khóa/mở thành viên. Không thể tự khóa hoặc tự đổi vai trò; backend tuần tự hóa cập nhật membership và luôn giữ ít nhất một Admin đang hoạt động trong project. Danh mục Khoa/Dịch vụ dùng PractitionerRole để gán hoặc ngừng phân công bác sĩ theo HealthcareService; Practitioner chỉ đọc các liên kết này. Patient có thể lọc lịch trống theo dịch vụ; backend chỉ trả dịch vụ đang hoạt động có Practitioner được phân công, kiểm tra lại liên kết khi đặt lịch và lưu loại dịch vụ vào Appointment.
 
-Nhân viên có thể check-in lịch booked/pending/waitlist từ bốn giờ trước giờ hẹn đến khi lịch kết thúc; `$check-in` chuyển trạng thái sang arrived, lưu người xác nhận/thời điểm/ghi chú và dùng version điều kiện để tránh cập nhật đồng thời bị ghi đè.
+Nhân viên có thể check-in lịch booked/pending/waitlist từ bốn giờ trước giờ hẹn đến khi lịch kết thúc; `$check-in` chuyển trạng thái sang arrived, lưu người xác nhận/thời điểm/ghi chú và dùng version điều kiện để tránh cập nhật đồng thời bị ghi đè. Patient có thể vào danh sách chờ theo HealthcareService khi hết Slot; backend chống đăng ký trùng và staff chỉ ghép yêu cầu với bác sĩ được phân công cùng dịch vụ trong transaction.
 
 ## Giới hạn
 
