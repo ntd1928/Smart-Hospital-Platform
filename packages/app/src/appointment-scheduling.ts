@@ -47,7 +47,9 @@ export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInt
   if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) return [];
   const firstDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
   const lastDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-  const dayCount = Math.floor((lastDate.getTime() - firstDate.getTime()) / 86_400_000) + 1;
+  const firstUtcDay = Date.UTC(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate());
+  const lastUtcDay = Date.UTC(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate());
+  const dayCount = Math.floor((lastUtcDay - firstUtcDay) / 86_400_000) + 1;
   if (dayCount < 1 || dayCount > 366) return [];
   const startTimeMatch = /^(\d{2}):(\d{2})$/.exec(startTime);
   const endTimeMatch = /^(\d{2}):(\d{2})$/.exec(endTime);
