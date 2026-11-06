@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { WithId } from '@medplum/core';
 import { createReference, parseSearchRequest } from '@medplum/core';
-import type { ClientApplication, Project, ProjectMembership, User } from '@medplum/fhirtypes';
+import type {
+  AccessPolicy,
+  AccessPolicyResource,
+  ClientApplication,
+  Project,
+  ProjectMembership,
+  User,
+} from '@medplum/fhirtypes';
 import { bcryptHashPassword, createProfile, createProjectMembership } from './auth/utils';
 import type { ServerConfig } from './config/utils';
 import { r4ProjectId } from './constants';
@@ -39,6 +46,8 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     await createSuperAdmin(globalShardRepo, config);
   }
 
+  await migratePatientAppointmentUpdatePolicy(globalShardRepo);
+
   // Shards are seeded serially. Potential optimizations if seeding new shards becomes slow:
   // - Read and parse the base definition bundles once and share them across shards; today each shard
   //   re-reads every file via processBaseDefinitions.
@@ -52,7 +61,48 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     if (!(await shardSystemRepo.searchOne({ resourceType: 'StructureDefinition' }))) {
       await seedBaseDefinitions(shardSystemRepo);
     }
+    await migratePatientAppointmentUpdatePolicy(shardSystemRepo);
   }
+}
+
+/** Apply the patient self-cancellation permission to existing default policies. */
+async function migratePatientAppointmentUpdatePolicy(systemRepo: SystemRepository): Promise<void> {
+  await systemRepo.processAllResources<Project>({ resourceType: 'Project' }, async (project) => {
+    const patientPolicyRef = project.defaultAccessPolicies?.find(
+      (policy) => policy.profileType === 'Patient'
+    )?.accessPolicy;
+    const policyId = patientPolicyRef?.reference?.match(/^AccessPolicy\/([^/]+)$/)?.[1];
+    if (!policyId) {
+      return;
+    }
+
+    const policy = await systemRepo.readResource<AccessPolicy>('AccessPolicy', policyId);
+    if (
+      policy.name !== 'Default Patient Access Policy' ||
+      policy.compartment?.reference !== '%patient' ||
+      policy.meta?.project !== project.id
+    ) {
+      return;
+    }
+
+    const appointmentRule = policy.resource?.find((rule) => rule.resourceType === 'Appointment');
+    if (!appointmentRule) {
+      return;
+    }
+    const interaction = new Set(appointmentRule.interaction ?? []);
+    const required: NonNullable<AccessPolicyResource['interaction']> = ['read', 'search', 'update'];
+    if (required.every((value) => interaction.has(value))) {
+      return;
+    }
+
+    await systemRepo.updateResource<AccessPolicy>({
+      ...policy,
+      resource: policy.resource?.map((rule) =>
+        rule === appointmentRule ? { ...rule, interaction: [...new Set([...interaction, ...required])] } : rule
+      ),
+    });
+    globalLogger.info('Updated default Patient Appointment policy', { projectId: project.id });
+  });
 }
 
 async function createR4Project(systemRepo: SystemRepository): Promise<WithId<Project>> {
