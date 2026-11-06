@@ -19,7 +19,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Appointment                          | CRUD/search cơ bản                            |
 | /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |
 | /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; quyền do policy/compartment kiểm tra |
-| /fhir/R4/MedicationRequest                      | CRUD/search yêu cầu thuốc theo FHIR; quyền do policy/compartment kiểm tra |
+| /fhir/R4/MedicationRequest                      | CRUD/search yêu cầu thuốc; app ghi đơn và chuyển active sang stopped/cancelled/completed có lý do |
 | /fhir/R4/AllergyIntolerance                     | CRUD/search dị ứng theo FHIR; Patient compartment có sẵn trong policy mặc định |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 

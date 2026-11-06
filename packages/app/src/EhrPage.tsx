@@ -387,13 +387,23 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function stopMedicationRequest(request: MedicationRequest, event: FormEvent<HTMLFormElement>) {
+  async function updateMedicationRequestStatus(
+    request: MedicationRequest,
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
     if (!request.id || request.status !== 'active') return;
     const form = event.currentTarget;
-    const reason = String(new FormData(form).get('medicationStopReason') ?? '').trim();
+    const data = new FormData(form);
+    const statusInput = String(data.get('medicationNextStatus') ?? '');
+    const reason = String(data.get('medicationStatusReason') ?? '').trim();
+    if (statusInput !== 'stopped' && statusInput !== 'cancelled' && statusInput !== 'completed') {
+      setError(new Error('Trạng thái yêu cầu thuốc không hợp lệ.'));
+      return;
+    }
+    const status = statusInput;
     if (!reason) {
-      setError(new Error('Nhập lý do ngừng yêu cầu thuốc.'));
+      setError(new Error('Nhập lý do cập nhật trạng thái yêu cầu thuốc.'));
       return;
     }
     setSaving(true);
@@ -403,16 +413,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const time = new Date().toISOString();
       const updated = await client.updateResource<MedicationRequest>({
         ...request,
-        status: 'stopped',
+        status,
         statusReason: { text: reason },
         note: [...(request.note ?? []), {
           time,
-          text: `Yêu cầu thuốc được ngừng: ${reason}`,
+          text: `Yêu cầu thuốc chuyển sang trạng thái ${status}: ${reason}`,
           authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
         }],
       });
       setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã ngừng yêu cầu thuốc.');
+      setMessage(status === 'completed' ? 'Đã đánh dấu liệu trình hoàn tất.' : status === 'cancelled' ? 'Đã hủy yêu cầu thuốc.' : 'Đã ngừng yêu cầu thuốc.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -919,10 +929,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{request.statusReason?.text ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : request.encounter?.display ?? request.encounter?.reference ?? '—'}</td>
                 {role !== 'Patient' && <td>{request.status === 'active' && <details>
-                  <summary>Ngừng đơn</summary>
-                  <form className="editor" onSubmit={(event) => void stopMedicationRequest(request, event)}>
-                    <label>Lý do<textarea name="medicationStopReason" maxLength={500} rows={3} required /></label>
-                    <button className="button" disabled={saving}>Xác nhận ngừng</button>
+                  <summary>Cập nhật trạng thái</summary>
+                  <form className="editor" onSubmit={(event) => void updateMedicationRequestStatus(request, event)}>
+                    <label>Trạng thái mới
+                      <select name="medicationNextStatus" defaultValue="stopped">
+                        <option value="stopped">Đã ngừng</option>
+                        <option value="cancelled">Đã hủy trước khi dùng</option>
+                        <option value="completed">Đã hoàn tất</option>
+                      </select>
+                    </label>
+                    <label>Lý do<textarea name="medicationStatusReason" maxLength={500} rows={3} required /></label>
+                    <button className="button" disabled={saving}>Lưu trạng thái</button>
                   </form>
                 </details>}</td>}
               </tr>
