@@ -515,7 +515,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
                 <td>{encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || '—'}</td>
-                <td>{encounter.note?.map((note) => note.text).filter(Boolean).join('\n') || '—'}</td>
+                <td>{encounter.note?.length ? <div className="clinical-note-list">
+                  {encounter.note.map((note, index) => (
+                    <div key={`${note.time ?? 'note'}-${index}`}>
+                      <small>{note.time ? new Date(note.time).toLocaleString('vi-VN') : 'Không có thời điểm'}{note.authorReference ? ` · ${note.authorReference.display ?? note.authorReference.reference ?? ''}` : ''}</small>
+                      <p>{note.text}</p>
+                    </div>
+                  ))}
+                </div> : '—'}</td>
                 <td>{encounter.appointment?.map((reference) => {
                   const appointment = appointments.find((item) => reference.reference === `Appointment/${item.id}`);
                   return appointment?.start ? new Date(appointment.start).toLocaleString('vi-VN') : reference.display ?? reference.reference;
