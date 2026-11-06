@@ -41,7 +41,7 @@ export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInt
   if (selectedWeekdays.size === 0) return [];
 
   const results: SlotInterval[] = [];
-  const cursor = firstDate;
+  const cursor = new Date(firstDate);
   while (cursor <= lastDate) {
     if (selectedWeekdays.has(cursor.getDay())) {
       const start = new Date(cursor);
