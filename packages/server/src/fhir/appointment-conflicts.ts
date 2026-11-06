@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { Appointment } from '@medplum/fhirtypes';
+import type { Appointment, Slot } from '@medplum/fhirtypes';
 import type { Repository } from './repo';
 
 const nonBlockingStatuses = new Set(['cancelled', 'entered-in-error', 'fulfilled', 'noshow']);
@@ -40,4 +40,25 @@ export async function findAppointmentConflict(
     if (conflict) return conflict;
   }
   return undefined;
+}
+
+/** Finds another Slot on the same Schedule that overlaps the candidate interval. */
+export async function findSlotConflict(repo: Repository, candidate: Slot, excludeId?: string): Promise<Slot | undefined> {
+  const scheduleReference = candidate.schedule?.reference;
+  if (!scheduleReference || !candidate.start || !candidate.end || candidate.status === 'entered-in-error') {
+    return undefined;
+  }
+  const start = new Date(candidate.start);
+  const end = new Date(candidate.end);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return undefined;
+
+  let conflict: Slot | undefined;
+  await repo.processAllResources<Slot>({ resourceType: 'Slot', schedule: scheduleReference }, async (existing) => {
+    if (existing.id === excludeId || existing.status === 'entered-in-error' || !existing.start || !existing.end) return;
+    const existingStart = new Date(existing.start);
+    const existingEnd = new Date(existing.end);
+    if (!Number.isFinite(existingStart.getTime()) || !Number.isFinite(existingEnd.getTime())) return;
+    if (existingEnd > existingStart && start < existingEnd && existingStart < end) conflict = existing;
+  });
+  return conflict;
 }
