@@ -488,7 +488,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         actor: practitionerReference,
         _count: '100',
       });
-      let schedule = practitionerSchedules.find((item) => item.active !== false);
+      const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
+      let schedule = activeSchedules[0];
       if (!schedule) {
         schedule = await client.createResource<Schedule>({
           resourceType: 'Schedule',
@@ -497,10 +498,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           actor: [{ reference: practitionerReference }],
         });
       }
-      const existingSlots = await client.searchResources('Slot', {
-        schedule: `Schedule/${schedule.id}`,
-        _count: '1000',
-      });
+      const existingSlots = (
+        await Promise.all(
+          activeSchedules.map((item) =>
+            client.searchResources('Slot', { schedule: `Schedule/${item.id}`, _count: '1000' })
+          )
+        )
+      ).flat();
       const slotConflict = existingSlots.some((slot) => {
         if (!slot.start || !slot.end || slot.status === 'entered-in-error') return false;
         const slotStart = new Date(slot.start);
