@@ -1,6 +1,6 @@
 # Smart Hospital Platform
 
-Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại tập trung vào đăng nhập, phân quyền, quản lý tài khoản và hồ sơ bệnh nhân trên FHIR API.
+Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại hỗ trợ đăng nhập, phân quyền, quản lý tài khoản/hồ sơ bệnh nhân và tạo/hủy lịch hẹn cơ bản trên FHIR API.
 
 Frontend React/TypeScript kết nối backend Node.js, PostgreSQL và Redis. Toàn bộ ứng dụng có thể chạy bằng Docker Compose; GitHub Actions được cấu hình kiểm tra chất lượng, build và kiểm thử tích hợp. Chưa triển khai lên cloud.
 

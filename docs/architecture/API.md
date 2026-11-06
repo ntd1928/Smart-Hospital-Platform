@@ -1,4 +1,4 @@
-# API tuần 5–6
+# API và luồng lịch hẹn cơ bản
 
 Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer token. Content-Type JSON FHIR: application/fhir+json. Frontend dùng SDK quản lý PKCE/token, không tự chèn token vào URL.
 
@@ -18,6 +18,8 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Practitioner                         | CRUD/search tương tự                          |
 | /fhir/R4/Appointment                          | CRUD/search cơ bản                            |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
+
+Giao diện `/appointments` dùng FHIR API hiện có: Admin chọn Patient và Practitioner; Doctor đặt cho Patient với profile của mình; Patient chỉ xem Appointment được trả về trong compartment cá nhân. Hủy lịch cập nhật trạng thái Appointment thành `cancelled`. Thời gian được nhập thủ công, chưa có Schedule/Slot hoặc kiểm tra trùng lịch.
 
 Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng. Chưa mở Encounter/Condition/Observation/Bot hoặc $ai.
 
