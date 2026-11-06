@@ -340,8 +340,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const quantity = String(data.get('medicationQuantity') ?? '').trim();
     const quantityUnit = String(data.get('medicationQuantityUnit') ?? '').trim();
     const repeats = String(data.get('medicationRepeats') ?? '').trim();
+    const allergyReviewAcknowledged = data.get('medicationAllergyReview') === 'on';
+    const activeMedicationAllergies = allergies.filter((allergy) =>
+      allergy.clinicalStatus?.coding?.[0]?.code === 'active' && allergy.category?.includes('medication')
+    );
     if (!patientId || !medication || !dosage || (quantity && (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0)) || (repeats && (!Number.isInteger(Number(repeats)) || Number(repeats) < 0))) {
       setError(new Error('Chọn bệnh nhân và nhập thuốc, hướng dẫn dùng cùng số lượng hợp lệ.'));
+      return;
+    }
+    if (activeMedicationAllergies.length && !allergyReviewAcknowledged) {
+      setError(new Error('Hãy xem và xác nhận đã đánh giá các dị ứng thuốc đang hoạt động trước khi lưu.'));
       return;
     }
     setSaving(true);
@@ -359,6 +367,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
         authoredOn: new Date().toISOString(),
         dosageInstruction: [{ text: dosage }],
+        note: activeMedicationAllergies.length ? [{
+          time: new Date().toISOString(),
+          text: 'Người kê đơn xác nhận đã xem xét các dị ứng thuốc đang hoạt động trên hồ sơ.',
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }] : undefined,
         dispenseRequest: {
           quantity: quantity ? { value: Number(quantity), unit: quantityUnit || undefined } : undefined,
           numberOfRepeatsAllowed: repeats ? Number(repeats) : undefined,
@@ -464,6 +477,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
   const activeAllergies = allergies.filter((allergy) => allergy.clinicalStatus?.coding?.[0]?.code === 'active');
+  const activeMedicationAllergies = activeAllergies.filter((allergy) => allergy.category?.includes('medication'));
   const latestObservation = observations
     .slice()
     .sort((a, b) => (b.effectiveDateTime ?? '').localeCompare(a.effectiveDateTime ?? ''))[0];
@@ -666,6 +680,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createMedicationRequest}>
           <h2>Kê thuốc</h2>
+          {activeMedicationAllergies.length > 0 && <div className="notice error" role="alert">
+            <strong>Có dị ứng thuốc đang hoạt động.</strong> Hãy đánh giá thủ công trước khi kê; hệ thống chưa kiểm tra tương tác tự động.
+            <ul>{activeMedicationAllergies.map((allergy) => (
+              <li key={allergy.id}>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ tác nhân'} · {allergy.verificationStatus?.coding?.[0]?.code ?? 'chưa xác minh'}{allergy.criticality ? ` · nguy cơ ${allergy.criticality}` : ''}</li>
+            ))}</ul>
+          </div>}
           <div className="form-grid">
             <label>Tên thuốc<input name="medicationName" maxLength={200} required /></label>
             <label>Cách dùng<input name="medicationDosage" maxLength={500} placeholder="Liều dùng, đường dùng, tần suất" required /></label>
@@ -680,6 +700,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 ))}
               </select>
             </label>
+            {activeMedicationAllergies.length > 0 && <label className="full-width">
+              <input type="checkbox" name="medicationAllergyReview" required /> Tôi đã xem và đánh giá dị ứng thuốc của bệnh nhân trước khi kê.
+            </label>}
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu yêu cầu thuốc'}</button>
