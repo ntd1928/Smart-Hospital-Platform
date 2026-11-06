@@ -301,6 +301,7 @@ function Dashboard({ role }: { role: HospitalRole }) {
 
 function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }) {
   const client = useMedplum();
+  const navigate = useNavigate();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
@@ -685,6 +686,26 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     } catch (e) {
       setError(e);
       setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startEncounter(appointment: Appointment, patientReference: string | undefined) {
+    if (!appointment.id || !patientReference) return;
+    const patientId = /^Patient\/([^/]+)$/.exec(patientReference)?.[1];
+    if (!patientId) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post<Parameters>('fhir/R4/Appointment/$start-encounter', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } }],
+      });
+      navigate(`/records?patient=${encodeURIComponent(patientId)}`);
+    } catch (e) {
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -1312,6 +1333,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   const canCheckIn =
                     staff && ['booked', 'pending', 'waitlist'].includes(appointment.status ?? '') &&
                     Date.now() >= checkInStart && Date.now() <= checkInEnd;
+                  const canStartEncounter = staff && ['arrived', 'fulfilled'].includes(appointment.status ?? '') && !!patientRef &&
+                    (role === 'Admin' || practitionerRef === `Practitioner/${profile.id}`);
                   return (
                     <tr key={appointment.id} data-resource-id={appointment.id}>
                       <td>
@@ -1343,6 +1366,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                           .join(' · ') || '—'}
                       </td>
                       <td>
+                          {canStartEncounter && (
+                            <button className="button primary" disabled={busy} onClick={() => void startEncounter(appointment, patientRef)}>
+                              {busy ? 'Đang mở…' : 'Mở lần khám'}
+                            </button>
+                          )}
                           {isUnscheduledWaitlist && staff && (
                             <details>
                               <summary>Ghép lịch chờ</summary>

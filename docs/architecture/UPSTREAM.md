@@ -20,5 +20,6 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - Form EHR ghi dấu hiệu sinh tồn bằng Observation LOINC/UCUM; huyết áp giữ hai component tâm thu/tâm trương trong một resource. Một lượt ghi gửi tất cả Observation trong FHIR transaction; UI hỗ trợ đọc và sửa component huyết áp.
 - Policy backend thu hẹp dữ liệu Patient/clinical cho Practitioner theo Patient.generalPractitioner; Admin quản lý phân công trong Patient editor. Chỉ dùng AccessPolicy đã có, không thay authorization bằng ẩn menu.
 - Patient tự cập nhật contact details qua policy FHIR; repository khôi phục read-only fields theo hiện hữu, kể cả giá trị falsy.
+- Appointment check-in được nối tới Encounter: staff bắt đầu Encounter từ lịch arrived/fulfilled qua transaction server-side có kiểm tra Practitioner được gán và chống tạo trùng.
 
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

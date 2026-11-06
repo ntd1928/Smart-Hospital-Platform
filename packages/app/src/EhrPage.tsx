@@ -3,6 +3,7 @@ import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationA
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { personName } from './access';
 import type { HospitalRole } from './access';
 
@@ -36,10 +37,12 @@ function localDateTimeInput(value?: string): string {
 
 export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }): React.ReactElement {
   const client = useMedplum();
+  const [searchParams] = useSearchParams();
+  const requestedPatientId = role === 'Patient' ? profile.id ?? '' : searchParams.get('patient') ?? '';
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatientRecord, setSelectedPatientRecord] = useState<Patient>();
   const [patientSearch, setPatientSearch] = useState('');
-  const [patientId, setPatientId] = useState(role === 'Patient' ? profile.id ?? '' : '');
+  const [patientId, setPatientId] = useState(requestedPatientId);
   const [encounters, setEncounters] = useState<Encounter[]>([]);
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
@@ -67,6 +70,22 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [medicationTo, setMedicationTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!requestedPatientId) return;
+    let live = true;
+    client.readResource<Patient>('Patient', requestedPatientId).then((patient) => {
+      if (!live) return;
+      setPatientId(requestedPatientId);
+      setSelectedPatientRecord(patient);
+      setPatients((current) => current.some((item) => item.id === patient.id) ? current : [patient, ...current]);
+    }).catch((e) => {
+      if (live) setError(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, [client, requestedPatientId]);
 
   useEffect(() => {
     if (role === 'Patient') return;
@@ -178,6 +197,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const reason = String(data.get('encounterReason')).trim();
     const clinicalNote = String(data.get('encounterNote') ?? '').trim();
     const clinicalNoteType = String(data.get('encounterNoteType') ?? 'progress');
+    const appointmentId = String(data.get('encounterAppointment') ?? '');
+    const appointmentAlreadyLinked = appointmentId && encounters.some((encounter) =>
+      encounter.appointment?.some((reference) => reference.reference === `Appointment/${appointmentId}`)
+    );
+    if (appointmentAlreadyLinked) {
+      setError(new Error('Appointment này đã được liên kết với một Encounter.'));
+      return;
+    }
     if (!patientId || !reason || !Number.isFinite(start.getTime())) {
       setError(new Error('Chọn bệnh nhân, thời gian và lý do khám hợp lệ.'));
       return;
@@ -186,7 +213,6 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const appointmentId = String(data.get('encounterAppointment') ?? '');
       const encounter = await client.createResource<Encounter>({
         resourceType: 'Encounter',
         status: 'in-progress',
@@ -1328,7 +1354,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             <label>Appointment đã hoàn tất
               <select name="encounterAppointment" defaultValue="">
                 <option value="">Không liên kết</option>
-                {appointments.filter((appointment) => appointment.status === 'fulfilled').map((appointment) => (
+                {appointments.filter((appointment) => appointment.status === 'fulfilled' && !encounters.some((encounter) =>
+                  encounter.appointment?.some((reference) => reference.reference === `Appointment/${appointment.id}`)
+                )).map((appointment) => (
                   <option key={appointment.id} value={appointment.id}>
                     {appointment.start ? new Date(appointment.start).toLocaleString('vi-VN') : appointment.id}
                   </option>

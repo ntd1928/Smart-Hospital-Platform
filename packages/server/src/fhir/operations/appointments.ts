@@ -11,7 +11,7 @@ import {
   parseSearchRequest,
 } from '@medplum/core';
 import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
-import type { Appointment, Bundle, HealthcareService, Organization, Patient, Practitioner, PractitionerRole, Reference, Schedule, Slot } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, Encounter, HealthcareService, Organization, Patient, Practitioner, PractitionerRole, Reference, Schedule, Slot } from '@medplum/fhirtypes';
 import { getAuthenticatedContext } from '../../context';
 import { DatabaseMode } from '../../database';
 import { findActiveAppointmentForSlot, findAppointmentConflict } from '../appointment-conflicts';
@@ -80,6 +80,18 @@ const checkInOperation = makeOperationDefinition(
   }
 );
 
+const startEncounterOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-start-encounter',
+    code: 'start-encounter',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('out', 'return', 'Encounter', 1, '1'),
+    ],
+  }
+);
+
 const waitlistOperation = makeOperationDefinition(
   { scope: 'type', resource: 'Appointment' },
   {
@@ -128,6 +140,10 @@ interface RescheduleParameters {
 interface CheckInParameters {
   appointment: Reference;
   note?: string;
+}
+
+interface StartEncounterParameters {
+  appointment: Reference;
 }
 
 interface WaitlistParameters {
@@ -291,6 +307,69 @@ export async function appointmentCheckInHandler(req: FhirRequest): Promise<FhirR
     { resourceTypes: ['Appointment', 'Practitioner'], source: 'appointment.checkIn' }
   );
   return [allOk, buildOutputParameters(checkInOperation, { return: appointment })];
+}
+
+/** Starts an Encounter for an arrived or fulfilled Appointment, avoiding duplicate links. */
+export async function appointmentStartEncounterHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!practitionerId) throw new OperationOutcomeError(forbidden('Only authenticated Practitioner staff may start an Encounter.'));
+  const params = parseInputParameters<StartEncounterParameters>(startEncounterOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  if (!appointmentId) return [badRequest('An Appointment reference is required.')];
+
+  const encounter = await ctx.repo.ensureInTransaction(
+    async (txRepo) => {
+      await txRepo.executeRawSql(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`${ctx.project.id}:Encounter:Appointment:${appointmentId}`],
+        { resourceTypes: ['Appointment', 'Encounter'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.startEncounterLock' }
+      );
+      const appointment = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+      if (appointment.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Appointment belongs to another project.'));
+      if (!['arrived', 'fulfilled'].includes(appointment.status ?? '')) {
+        throw new OperationOutcomeError(conflict('Check in the Patient before starting an Encounter.'));
+      }
+      const patientReferences = [...new Set((appointment.participant ?? [])
+        .map((participant) => participant.actor?.reference)
+        .filter((reference): reference is string => /^Patient\/[^/]+$/.test(reference ?? '')))];
+      if (patientReferences.length !== 1) throw new OperationOutcomeError(badRequest('Appointment must reference exactly one Patient.'));
+      const patient = await txRepo.readResource<Patient>('Patient', patientReferences[0].slice('Patient/'.length));
+      if (patient.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Patient belongs to another project.'));
+      const staff = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
+      if (staff.meta?.project !== ctx.project.id || staff.active === false) {
+        throw new OperationOutcomeError(forbidden('Inactive or out-of-project Practitioners cannot start an Encounter.'));
+      }
+      if (!ctx.membership.admin && !(appointment.participant ?? []).some((participant) => participant.actor?.reference === `Practitioner/${practitionerId}`)) {
+        throw new OperationOutcomeError(forbidden('Only the Practitioner assigned to this Appointment may start its Encounter.'));
+      }
+
+      const linked = await txRepo.search<Encounter>(parseSearchRequest<Encounter>(
+        `Encounter?appointment=Appointment/${encodeURIComponent(appointmentId)}&_count=100`
+      ));
+      const existing = (linked.entry ?? []).map((entry) => entry.resource).find((resource) =>
+        resource?.meta?.project === ctx.project.id &&
+        resource.status !== 'cancelled' &&
+        resource.status !== 'entered-in-error'
+      );
+      if (existing) return existing as Encounter;
+
+      const now = new Date().toISOString();
+      return txRepo.createResource<Encounter>({
+        resourceType: 'Encounter',
+        meta: { project: ctx.project.id },
+        status: 'in-progress',
+        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
+        subject: { reference: patientReferences[0] },
+        appointment: [{ reference: `Appointment/${appointmentId}` }],
+        participant: [{ individual: { reference: `Practitioner/${practitionerId}` } }],
+        period: { start: now },
+        reasonCode: [{ text: appointment.description?.trim() || appointment.serviceType?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ') || 'Khám theo lịch hẹn' }],
+      });
+    },
+    { resourceTypes: ['Appointment', 'Encounter', 'Patient', 'Practitioner'], source: 'appointment.startEncounter' }
+  );
+  return [allOk, buildOutputParameters(startEncounterOperation, { return: encounter })];
 }
 
 /** Returns a bounded list of public availability and minimal provider identity for Patient booking. */
