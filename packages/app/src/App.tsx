@@ -5,7 +5,14 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
-import { findAppointmentConflict, findAvailableSlots } from './appointment-scheduling';
+import {
+  expandRecurringSlotIntervals,
+  findAppointmentConflict,
+  findAvailableSlots,
+  RECURRING_SLOT_SERIES_SYSTEM,
+  removeIntervalsConflictingWithSlots,
+  removeOverlappingIntervals,
+} from './appointment-scheduling';
 import type { HospitalRole } from './access';
 
 function ErrorMessage({ error }: { error: unknown }) {
@@ -297,6 +304,21 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [recurringSeriesIds, setRecurringSeriesIds] = useState<string[]>(() => {
+    try {
+      const stored = window.sessionStorage.getItem('smart-hospital.recurring-slot-series-list');
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) return parsed;
+        return [];
+      }
+      const previous = window.sessionStorage.getItem('smart-hospital.recurring-slot-series');
+      return previous ? [previous] : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedRecurringSeriesId, setSelectedRecurringSeriesId] = useState<string>();
   const staff = role !== 'Patient';
 
   useEffect(() => {
@@ -478,7 +500,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         actor: practitionerReference,
         _count: '100',
       });
-      let schedule = practitionerSchedules.find((item) => item.active !== false);
+      const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
+      let schedule = activeSchedules[0];
       if (!schedule) {
         schedule = await client.createResource<Schedule>({
           resourceType: 'Schedule',
@@ -487,10 +510,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           actor: [{ reference: practitionerReference }],
         });
       }
-      const existingSlots = await client.searchResources('Slot', {
-        schedule: `Schedule/${schedule.id}`,
-        _count: '1000',
-      });
+      const existingSlots = (
+        await Promise.all(
+          activeSchedules.map((item) =>
+            client.searchResources('Slot', { schedule: `Schedule/${item.id}`, _count: '1000' })
+          )
+        )
+      ).flat();
       const slotConflict = existingSlots.some((slot) => {
         if (!slot.start || !slot.end || slot.status === 'entered-in-error') return false;
         const slotStart = new Date(slot.start);
@@ -509,6 +535,229 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         end: end.toISOString(),
       });
       setMessage('Đã thêm khung giờ trống.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createRecurringAvailability(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const practitionerId = role === 'Doctor' ? profile.id : String(data.get('availabilityPractitioner'));
+    const replaceSeries = data.has('replaceRecurringSeries');
+    const seriesIdToReplace = selectedRecurringSeriesId ?? recurringSeriesIds[0];
+    const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
+      startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
+      endDate: new Date(`${String(data.get('recurringEndDate'))}T00:00:00`),
+      startTime: String(data.get('recurringStartTime')),
+      endTime: String(data.get('recurringEndTime')),
+      weekdays: data.getAll('recurringWeekday').map(Number),
+    })).filter(({ start }) => start > new Date());
+    if (!practitionerId || intervals.length === 0) {
+      setError(new Error('Chọn các ngày và khoảng thời gian tương lai hợp lệ để tạo lịch.'));
+      return;
+    }
+    if (intervals.length > 100) {
+      setError(new Error('Lịch lặp vượt quá 100 Slot. Hãy rút ngắn khoảng ngày.'));
+      return;
+    }
+    if (replaceSeries && !seriesIdToReplace) {
+      setError(new Error('Chọn một series gần đây để thay đổi.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const practitionerReference = `Practitioner/${practitionerId}`;
+      const [appointments, practitionerSchedules] = await Promise.all([
+        client.searchResources('Appointment', { actor: practitionerReference, _count: '1000' }),
+        client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
+      ]);
+      const oldSeriesSlots = replaceSeries
+        ? await client.searchResources('Slot', {
+            identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${seriesIdToReplace}`,
+            status: 'free',
+            start: `ge${new Date().toISOString()}`,
+            _count: '100',
+          })
+        : [];
+      if (replaceSeries && oldSeriesSlots.length === 0) {
+        setError(new Error('Series không còn Slot trống trong tương lai để thay đổi.'));
+        return;
+      }
+      const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
+      let schedule = replaceSeries
+        ? activeSchedules.find((item) => `Schedule/${item.id}` === oldSeriesSlots[0]?.schedule?.reference)
+        : activeSchedules[0];
+      if (replaceSeries && !schedule) {
+        setError(new Error('Series không thuộc bác sĩ đã chọn hoặc Schedule của series đã ngừng hoạt động.'));
+        return;
+      }
+      const existingSlots = (
+        await Promise.all(
+          activeSchedules.map((item) =>
+            client.searchResources('Slot', { schedule: `Schedule/${item.id}`, _count: '1000' })
+          )
+        )
+      ).flat();
+      const oldSlotIds = new Set(oldSeriesSlots.map((slot) => slot.id).filter((id): id is string => Boolean(id)));
+      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots, oldSlotIds).filter(
+        ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
+      );
+      if (availableIntervals.length === 0) {
+        setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
+        return;
+      }
+      if (!schedule && !replaceSeries) {
+        schedule = await client.createResource<Schedule>({
+          resourceType: 'Schedule',
+          identifier: [{ system: 'urn:smart-hospital:availability', value: practitionerId }],
+          active: true,
+          actor: [{ reference: practitionerReference }],
+        });
+      }
+      if (!schedule) throw new Error('Schedule không khả dụng để tạo Slot.');
+      const seriesId = replaceSeries ? seriesIdToReplace! : crypto.randomUUID();
+      const transactionEntries = [
+        ...oldSeriesSlots.filter((slot) => slot.id).map((slot) => ({
+          resource: { ...slot, status: 'entered-in-error' },
+          request: {
+            method: 'PUT',
+            url: `Slot/${slot.id}`,
+            ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+          },
+        })),
+        ...availableIntervals.map(({ start, end }) => ({
+          resource: {
+            resourceType: 'Slot',
+            schedule: { reference: `Schedule/${schedule.id}` },
+            identifier: [{ system: RECURRING_SLOT_SERIES_SYSTEM, value: seriesId }],
+            status: 'free',
+            start: start.toISOString(),
+            end: end.toISOString(),
+          },
+          request: { method: 'POST', url: 'Slot' },
+        })),
+      ];
+      if (transactionEntries.length > 100) {
+        setError(new Error('Thay đổi series vượt quá 100 thao tác. Hãy dùng khoảng ngày ngắn hơn.'));
+        return;
+      }
+      await client.post('fhir/R4', {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: transactionEntries,
+      });
+      const nextSeriesIds = [seriesId, ...recurringSeriesIds.filter((id) => id !== seriesId)].slice(0, 20);
+      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
+      setRecurringSeriesIds(nextSeriesIds);
+      setSelectedRecurringSeriesId(seriesId);
+      setMessage(
+        `${replaceSeries ? 'Đã cập nhật' : 'Đã thêm'} ${availableIntervals.length} khung giờ; bỏ qua ${
+          intervals.length - availableIntervals.length
+        } khung giờ bị trùng.`
+      );
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelCreatedRecurringSeries() {
+    if (!selectedRecurringSeriesId || !window.confirm('Hủy các Slot trống trong tương lai của series đã chọn?')) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const seriesSlots = await client.searchResources('Slot', {
+        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${selectedRecurringSeriesId}`,
+        status: 'free',
+        start: `ge${new Date().toISOString()}`,
+        _count: '100',
+      });
+      if (seriesSlots.length > 0) {
+        await client.post('fhir/R4', {
+          resourceType: 'Bundle',
+          type: 'transaction',
+          entry: seriesSlots.filter((slot) => slot.id).map((slot) => ({
+            resource: { ...slot, status: 'busy-unavailable' },
+            request: {
+              method: 'PUT',
+              url: `Slot/${slot.id}`,
+              ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+            },
+          })),
+        });
+      }
+      setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
+      const nextSeriesIds = recurringSeriesIds.filter((id) => id !== selectedRecurringSeriesId);
+      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
+      window.sessionStorage.removeItem('smart-hospital.recurring-slot-series');
+      setRecurringSeriesIds(nextSeriesIds);
+      setSelectedRecurringSeriesId(nextSeriesIds[0]);
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deactivateSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const scheduleId = String(new FormData(form).get('scheduleToDeactivate'));
+    if (!scheduleId || !window.confirm('Tắt Schedule và ngừng các Slot còn trống trong tương lai?')) return;
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const [schedule, futureFreeSlots] = await Promise.all([
+        client.readResource<Schedule>('Schedule', scheduleId),
+        client.searchResources('Slot', {
+          schedule: `Schedule/${scheduleId}`,
+          status: 'free',
+          start: `ge${new Date().toISOString()}`,
+          _count: '100',
+        }),
+      ]);
+      if (schedule.active === false) {
+        setError(new Error('Schedule đã được tắt.'));
+        return;
+      }
+      if (futureFreeSlots.length > 99) {
+        setError(new Error('Schedule cần hơn 100 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
+        return;
+      }
+      const entries = [
+        ...futureFreeSlots.filter((slot) => slot.id).map((slot) => ({
+          resource: { ...slot, status: 'busy-unavailable' },
+          request: {
+            method: 'PUT',
+            url: `Slot/${slot.id}`,
+            ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+          },
+        })),
+        {
+          resource: { ...schedule, active: false },
+          request: {
+            method: 'PUT',
+            url: `Schedule/${schedule.id}`,
+            ifMatch: schedule.meta?.versionId ? `W/\"${schedule.meta.versionId}\"` : undefined,
+          },
+        },
+      ];
+      await client.post('fhir/R4', { resourceType: 'Bundle', type: 'transaction', entry: entries });
+      setMessage(`Đã tắt Schedule và ngừng ${futureFreeSlots.length} Slot còn trống trong tương lai.`);
       form.reset();
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -594,7 +843,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form className="panel editor" onSubmit={createAvailability}>
           <h2>Thêm khung giờ trống</h2>
-          <p className="muted">Tạo một Slot trong Schedule của bác sĩ; khung giờ lặp chưa được hỗ trợ.</p>
+          <p className="muted">Tạo một Slot riêng trong Schedule của bác sĩ.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
@@ -636,6 +885,82 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
               {busy ? 'Đang lưu…' : 'Thêm Slot'}
             </button>
+          </div>
+        </form>
+      )}
+      {staff && (
+        <form className="panel editor" onSubmit={createRecurringAvailability}>
+          <h2>Tạo khung giờ lặp</h2>
+          <p className="muted">Tạo hoặc thay Slot trống của lịch lặp; Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
+          <div className="form-grid">
+            {role === 'Admin' ? (
+              <label>
+                Bác sĩ
+                <select name="availabilityPractitioner" required defaultValue="">
+                  <option value="" disabled>Chọn bác sĩ</option>
+                  {practitioners.filter((practitioner) => practitioner.active !== false).map((practitioner) => (
+                    <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label>Bác sĩ<input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled /></label>
+            )}
+            <label>Ngày bắt đầu<input name="recurringStartDate" type="date" required /></label>
+            <label>Ngày kết thúc<input name="recurringEndDate" type="date" required /></label>
+            <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required /></label>
+            <label>Giờ kết thúc<input name="recurringEndTime" type="time" required /></label>
+            <label className="full-width">
+              <input name="replaceRecurringSeries" type="checkbox" disabled={recurringSeriesIds.length === 0} />
+              {' '}Thay các Slot còn trống trong tương lai của series đã chọn
+            </label>
+            <fieldset className="full-width">
+              <legend>Ngày trong tuần</legend>
+              {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map((day, index) => (
+                <label key={day}><input name="recurringWeekday" type="checkbox" value={index} /> {day}</label>
+              ))}
+            </fieldset>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
+              {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
+            </button>
+            {recurringSeriesIds.length > 0 && (
+              <>
+                <label>
+                  Series gần đây
+                  <select
+                    value={selectedRecurringSeriesId ?? recurringSeriesIds[0]}
+                    onChange={(event) => setSelectedRecurringSeriesId(event.currentTarget.value)}
+                  >
+                    {recurringSeriesIds.map((seriesId) => <option key={seriesId} value={seriesId}>{seriesId}</option>)}
+                  </select>
+                </label>
+                <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
+                  Hủy Slot trống của series đã chọn
+                </button>
+              </>
+            )}
+          </div>
+        </form>
+      )}
+      {staff && schedules.some((schedule) => schedule.active !== false) && (
+        <form className="panel editor" onSubmit={deactivateSchedule}>
+          <h2>Tắt Schedule</h2>
+          <p className="muted">Các Slot còn trống trong tương lai được ngừng cùng lúc; lịch hẹn đã đặt vẫn giữ nguyên.</p>
+          <div className="form-grid">
+            <label>
+              Schedule đang hoạt động
+              <select name="scheduleToDeactivate" required defaultValue="">
+                <option value="" disabled>Chọn Schedule</option>
+                {schedules.filter((schedule) => schedule.active !== false).map((schedule) => (
+                  <option key={schedule.id} value={schedule.id}>{schedule.actor?.map((actor) => actor.display ?? actor.reference).join(', ') || schedule.id}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button" disabled={busy}>{busy ? 'Đang lưu…' : 'Tắt Schedule'}</button>
           </div>
         </form>
       )}

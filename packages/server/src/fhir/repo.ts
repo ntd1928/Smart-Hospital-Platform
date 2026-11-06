@@ -63,10 +63,13 @@ import type {
   OperationDefinitionParameter,
   OperationOutcome,
   Parameters,
+  Practitioner,
   Project,
   Reference,
   Resource,
   ResourceType,
+  Schedule,
+  Slot,
 } from '@medplum/fhirtypes';
 import assert from 'node:assert';
 import { randomUUID } from 'node:crypto';
@@ -105,7 +108,14 @@ import {
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
-import { findAppointmentConflict, getAppointmentPractitionerReferences } from './appointment-conflicts';
+import {
+  findAppointmentConflict,
+  findAppointmentConflictForSlot,
+  findActiveAppointmentForSlot,
+  findAppointmentForSlot,
+  findSlotConflict,
+  getAppointmentPractitionerReferences,
+} from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
@@ -578,12 +588,19 @@ export class Repository extends FhirRepository implements Disposable {
     try {
       const authenticatedAppointment =
         resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSlot =
+        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       const result = authenticatedAppointment
         ? await this.withAppointmentWrite(resourceWithId, async (repo) => {
             await repo.ensureNoAppointmentConflict(resourceWithId);
             return repo.updateResourceImpl(resourceWithId, true);
           })
-        : await this.updateResourceImpl(resourceWithId, true);
+        : authenticatedSlot
+          ? await this.withSlotWrite(resourceWithId, async (repo) => {
+              await repo.ensureNoSlotConflict(resourceWithId);
+              return repo.updateResourceImpl(resourceWithId, true);
+            })
+          : await this.updateResourceImpl(resourceWithId, true);
       const durationMs = Date.now() - startTime;
 
       await this.postCommit(async () => {
@@ -951,10 +968,24 @@ export class Repository extends FhirRepository implements Disposable {
       let result: WithId<T>;
       const authenticatedAppointment =
         resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSlot =
+        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSchedule =
+        resource.resourceType === 'Schedule' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       if (authenticatedAppointment) {
         result = await this.withAppointmentWrite(resource, async (repo) => {
           await repo.ensureAppointmentCancellationAllowed(resource);
           await repo.ensureNoAppointmentConflict(resource, resource.id);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (authenticatedSlot) {
+        result = await this.withSlotWrite(resource, async (repo) => {
+          await repo.ensureNoSlotConflict(resource, resource.id);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (authenticatedSchedule) {
+        result = await this.withScheduleWrite(resource, async (repo) => {
+          await repo.ensureScheduleMutationAllowed(resource);
           return repo.updateResourceImpl(resource, false, options);
         });
       } else if (options?.ifMatch) {
@@ -993,6 +1024,176 @@ export class Repository extends FhirRepository implements Disposable {
           },
         ],
       });
+    }
+  }
+
+  private async ensureNoSlotConflict(resource: Resource, excludeId?: string): Promise<void> {
+    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
+    const slot = resource as Slot;
+    const scheduleReference = slot.schedule?.reference;
+    let retiringExistingFreeSlot = false;
+    if (slot.id) {
+      const existingSlot = await this.readResource<Slot>('Slot', slot.id);
+      retiringExistingFreeSlot = existingSlot.status === 'free' && slot.status === 'busy-unavailable';
+      if (
+        (existingSlot.schedule?.reference !== scheduleReference ||
+          existingSlot.start !== slot.start ||
+          existingSlot.end !== slot.end) &&
+        (await findAppointmentForSlot(this, slot.id))
+      ) {
+        throw new OperationOutcomeError(badRequest('Cannot change the schedule or time of a Slot referenced by an active Appointment.'));
+      }
+    }
+    if (scheduleReference?.startsWith('Schedule/')) {
+      const start = slot.start ? new Date(slot.start).getTime() : Number.NaN;
+      const end = slot.end ? new Date(slot.end).getTime() : Number.NaN;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw new OperationOutcomeError(badRequest('Slot must have a valid start and end time.'));
+      }
+    }
+    if (scheduleReference?.startsWith('Schedule/')) {
+      const scheduleId = scheduleReference.slice('Schedule/'.length);
+      const schedule = await this.readResource<Schedule>('Schedule', scheduleId);
+      if (schedule.active === false) {
+        throw new OperationOutcomeError(badRequest('Cannot create or update a Slot in an inactive Schedule.'));
+      }
+      if (!schedule.actor?.some((actor) => actor.reference?.startsWith('Practitioner/'))) {
+        throw new OperationOutcomeError(badRequest('Schedule must reference a Practitioner before it can contain Slots.'));
+      }
+      const practitionerReferences = schedule.actor
+        .map((actor) => actor.reference)
+        .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false);
+      for (const practitionerReference of practitionerReferences) {
+        const practitionerId = practitionerReference.slice('Practitioner/'.length);
+        const practitioner = await this.readResource<Practitioner>('Practitioner', practitionerId);
+        if (practitioner.active === false && !retiringExistingFreeSlot) {
+          throw new OperationOutcomeError(badRequest('Cannot create or update a Slot for an inactive Practitioner.'));
+        }
+      }
+      if (!retiringExistingFreeSlot && (await findAppointmentConflictForSlot(this, slot, practitionerReferences))) {
+        throw new OperationOutcomeError({
+          resourceType: 'OperationOutcome',
+          issue: [
+            {
+              severity: 'error',
+              code: 'conflict',
+              details: { text: 'Slot overlaps an active Appointment for this Practitioner.' },
+            },
+          ],
+        });
+      }
+    }
+    if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
+      throw new OperationOutcomeError(badRequest('Cannot mark a Slot free while an active Appointment references it.'));
+    }
+    if (slot.status === 'entered-in-error' && slot.id && (await findActiveAppointmentForSlot(this, slot.id))) {
+      throw new OperationOutcomeError(badRequest('Cannot invalidate a Slot referenced by an active Appointment.'));
+    }
+    if (!retiringExistingFreeSlot && (await findSlotConflict(this, slot, excludeId))) {
+      throw new OperationOutcomeError({
+        resourceType: 'OperationOutcome',
+        issue: [
+          {
+            severity: 'error',
+            code: 'conflict',
+            details: { text: 'Schedule already has an overlapping Slot.' },
+          },
+        ],
+      });
+    }
+  }
+
+  private async ensureScheduleMutationAllowed(resource: Resource): Promise<void> {
+    if (
+      resource.resourceType !== 'Schedule' ||
+      !resource.id ||
+      !(tryGetRequestContext() instanceof AuthenticatedRequestContext)
+    ) {
+      return;
+    }
+    const schedule = resource as Schedule;
+    const current = await this.readResource<Schedule>('Schedule', schedule.id);
+    const currentActors = (current.actor ?? []).map((actor) => actor.reference ?? '').sort();
+    const nextActors = (schedule.actor ?? []).map((actor) => actor.reference ?? '').sort();
+    if (current.active === schedule.active && currentActors.join('|') === nextActors.join('|')) return;
+
+    let hasFutureFreeSlot = false;
+    await this.processAllResources<Slot>(
+      {
+        resourceType: 'Slot',
+        schedule: `Schedule/${schedule.id}`,
+        status: 'free',
+        start: `ge${new Date().toISOString()}`,
+      },
+      async () => {
+        hasFutureFreeSlot = true;
+      }
+    );
+    if (hasFutureFreeSlot) {
+      throw new OperationOutcomeError(
+        badRequest('Retire future free Slots before changing the Schedule status or Practitioner actors.')
+      );
+    }
+  }
+
+  private async withScheduleWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      await repo.lockSchedule(resource);
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'Schedule',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.scheduleWrite',
+    });
+  }
+
+  private async lockSchedule(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'Schedule' || !resource.id || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
+      return;
+    }
+    const projectId = this.currentProject()?.id;
+    if (!projectId) return;
+    await this.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${projectId}:Schedule/${resource.id}`],
+      { resourceTypes: 'Schedule', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSchedule' }
+    );
+  }
+
+  private async withSlotWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      await repo.lockSlotSchedule(resource);
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'Slot',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.slotWrite',
+    });
+  }
+
+  private async lockSlotSchedule(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
+    const projectId = this.currentProject()?.id;
+    const scheduleReference = (resource as Slot).schedule?.reference;
+    if (!projectId || !scheduleReference) return;
+    const lockKeys = new Set([`${projectId}:${scheduleReference}`]);
+    const scheduleMatch = /^Schedule\/([^/]+)$/.exec(scheduleReference);
+    if (scheduleMatch) {
+      const schedule = await this.readResource<Schedule>('Schedule', scheduleMatch[1]);
+      for (const actor of schedule.actor ?? []) {
+        if (actor.reference?.startsWith('Practitioner/')) lockKeys.add(`${projectId}:${actor.reference}`);
+      }
+    }
+    for (const lockKey of Array.from(lockKeys).sort()) {
+      await this.executeRawSql(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [lockKey],
+        { resourceTypes: 'Slot', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSlotSchedule' }
+      );
     }
   }
 
@@ -2595,7 +2796,9 @@ export class Repository extends FhirRepository implements Disposable {
   ): Promise<TResult> {
     this.assertUsable();
     const transactionOptions =
-      !options.isolationLevel && !options.serializable && normalizeResourceTypes(options.resourceTypes).has('Appointment')
+      !options.isolationLevel &&
+      !options.serializable &&
+      ['Appointment', 'Slot'].some((resourceType) => normalizeResourceTypes(options.resourceTypes).has(resourceType))
         ? { ...options, serializable: true }
         : options;
     // Resolving up front is what binds the transaction to a shard: BEGIN must be sent to one
