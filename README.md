@@ -106,7 +106,7 @@ Lệnh dừng container, giữ volume. API/web dừng bằng Ctrl+C. Không dùn
 
 ## Tài liệu
 
-- [Kiến trúc](docs/architecture/ARCHITECTURE.md) và [API](docs/architecture/API.md).
+- [Kiến trúc](docs/architecture/ARCHITECTURE.md), [API](docs/architecture/API.md) và [kế hoạch tuần 5–14](docs/PLAN.md).
 - [Context kỹ thuật](docs/development/CONTEXT.md), [đóng góp](CONTRIBUTING.md) và [CI](docs/development/CI.md).
 - [Phân loại tài liệu](docs/development/DOCUMENTATION.md), [AI research](docs/research/AI-RESEARCH.md) và [demo](docs/reports/DEMO.md).
 - [AGENTS.md](AGENTS.md): quy tắc cho coding agent.
