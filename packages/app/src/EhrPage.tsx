@@ -331,14 +331,18 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Kết quả</h2>
         {observations.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày</th><th>Chỉ số</th><th>Giá trị</th></tr></thead>
-          <tbody>{observations.map((observation) => (
-            <tr key={observation.id}>
-              <td>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleString('vi-VN') : '—'}</td>
-              <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
-              <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
-            </tr>
-          ))}</tbody>
+          <thead><tr><th>Ngày</th><th>Chỉ số</th><th>Giá trị</th><th>Lần khám</th></tr></thead>
+          <tbody>{observations.map((observation) => {
+            const encounter = encounters.find((item) => observation.encounter?.reference === `Encounter/${item.id}`);
+            return (
+              <tr key={observation.id}>
+                <td>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleString('vi-VN') : '—'}</td>
+                <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
+                <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
+                <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
+              </tr>
+            );
+          })}</tbody>
         </table></div> : <p className="empty">Chưa có kết quả trong phạm vi truy cập.</p>}
       </section>
       {role !== 'Patient' && selectedPatient && <p className="muted">Bác sĩ/nhân viên: dữ liệu chỉ hiện khi FHIR API cho phép đọc bệnh nhân đã chọn.</p>}
