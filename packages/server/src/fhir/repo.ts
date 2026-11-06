@@ -50,6 +50,7 @@ import type {
 } from '@medplum/fhir-router';
 import { FhirRepository, RepositoryMode } from '@medplum/fhir-router';
 import type {
+  Appointment,
   AccessPolicy,
   AccessPolicyResource,
   AuditEvent,
@@ -104,6 +105,7 @@ import {
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
+import { findAppointmentConflict } from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
@@ -548,6 +550,7 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   async createResource<T extends Resource>(resource: T, options?: CreateResourceOptions): Promise<WithId<T>> {
+    await this.ensureNoAppointmentConflict(resource);
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
     await this.resourceCap()?.created();
 
@@ -935,6 +938,7 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   async updateResource<T extends Resource>(resource: T, options?: UpdateResourceOptions): Promise<WithId<T>> {
+    await this.ensureNoAppointmentConflict(resource, resource.resourceType === 'Appointment' ? resource.id : undefined);
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
 
     const startTime = Date.now();
@@ -957,6 +961,25 @@ export class Repository extends FhirRepository implements Disposable {
       const durationMs = Date.now() - startTime;
       this.logEvent(UpdateInteraction, AuditEventOutcome.MinorFailure, err, { resource, durationMs });
       throw err;
+    }
+  }
+
+  private async ensureNoAppointmentConflict(resource: Resource, excludeId?: string): Promise<void> {
+    if (resource.resourceType !== 'Appointment' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
+      return;
+    }
+    const conflict = await findAppointmentConflict(this, resource as Appointment, excludeId);
+    if (conflict) {
+      throw new OperationOutcomeError({
+        resourceType: 'OperationOutcome',
+        issue: [
+          {
+            severity: 'error',
+            code: 'conflict',
+            details: { text: 'Practitioner is already booked during the requested time.' },
+          },
+        ],
+      });
     }
   }
 
