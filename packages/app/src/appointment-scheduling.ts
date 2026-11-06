@@ -94,8 +94,13 @@ export function removeOverlappingIntervals(intervals: SlotInterval[]): SlotInter
 }
 
 /** Drops generated intervals that overlap an existing non-invalid Slot. */
-export function removeIntervalsConflictingWithSlots(intervals: SlotInterval[], slots: Slot[]): SlotInterval[] {
+export function removeIntervalsConflictingWithSlots(
+  intervals: SlotInterval[],
+  slots: Slot[],
+  excludedSlotIds: ReadonlySet<string> = new Set()
+): SlotInterval[] {
   const occupied = slots.flatMap((slot) => {
+    if (slot.id && excludedSlotIds.has(slot.id)) return [];
     if (slot.status === 'entered-in-error' || !slot.start || !slot.end) return [];
     const start = new Date(slot.start);
     const end = new Date(slot.end);
