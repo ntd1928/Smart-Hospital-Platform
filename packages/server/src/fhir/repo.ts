@@ -109,6 +109,7 @@ import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
 import {
   findAppointmentConflict,
+  findActiveAppointmentForSlot,
   findAppointmentForSlot,
   findSlotConflict,
   getAppointmentPractitionerReferences,
@@ -1051,6 +1052,9 @@ export class Repository extends FhirRepository implements Disposable {
     }
     if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
       throw new OperationOutcomeError(badRequest('Cannot mark a Slot free while an active Appointment references it.'));
+    }
+    if (slot.status === 'entered-in-error' && slot.id && (await findActiveAppointmentForSlot(this, slot.id))) {
+      throw new OperationOutcomeError(badRequest('Cannot invalidate a Slot referenced by an active Appointment.'));
     }
     if (await findSlotConflict(this, slot, excludeId)) {
       throw new OperationOutcomeError({
