@@ -549,6 +549,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     const form = event.currentTarget;
     const data = new FormData(form);
     const practitionerId = role === 'Doctor' ? profile.id : String(data.get('availabilityPractitioner'));
+    const replaceSeries = data.has('replaceRecurringSeries');
+    const seriesIdToReplace = selectedRecurringSeriesId ?? recurringSeriesIds[0];
     const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
       startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
       endDate: new Date(`${String(data.get('recurringEndDate'))}T00:00:00`),
@@ -564,6 +566,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       setError(new Error('Lịch lặp vượt quá 100 Slot. Hãy rút ngắn khoảng ngày.'));
       return;
     }
+    if (replaceSeries && !seriesIdToReplace) {
+      setError(new Error('Chọn một series gần đây để thay đổi.'));
+      return;
+    }
     setBusy(true);
     setError(undefined);
     setMessage('');
@@ -573,8 +579,26 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         client.searchResources('Appointment', { actor: practitionerReference, _count: '1000' }),
         client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
       ]);
+      const oldSeriesSlots = replaceSeries
+        ? await client.searchResources('Slot', {
+            identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${seriesIdToReplace}`,
+            status: 'free',
+            start: `ge${new Date().toISOString()}`,
+            _count: '100',
+          })
+        : [];
+      if (replaceSeries && oldSeriesSlots.length === 0) {
+        setError(new Error('Series không còn Slot trống trong tương lai để thay đổi.'));
+        return;
+      }
       const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
-      let schedule = activeSchedules[0];
+      let schedule = replaceSeries
+        ? activeSchedules.find((item) => `Schedule/${item.id}` === oldSeriesSlots[0]?.schedule?.reference)
+        : activeSchedules[0];
+      if (replaceSeries && !schedule) {
+        setError(new Error('Không tìm thấy Schedule đang hoạt động của series đã chọn.'));
+        return;
+      }
       const existingSlots = (
         await Promise.all(
           activeSchedules.map((item) =>
@@ -582,14 +606,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           )
         )
       ).flat();
-      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots).filter(
+      const oldSlotIds = new Set(oldSeriesSlots.map((slot) => slot.id).filter((id): id is string => Boolean(id)));
+      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots, oldSlotIds).filter(
         ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
       );
       if (availableIntervals.length === 0) {
         setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
         return;
       }
-      if (!schedule) {
+      if (!schedule && !replaceSeries) {
         schedule = await client.createResource<Schedule>({
           resourceType: 'Schedule',
           identifier: [{ system: 'urn:smart-hospital:availability', value: practitionerId }],
@@ -597,11 +622,18 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           actor: [{ reference: practitionerReference }],
         });
       }
-      const seriesId = crypto.randomUUID();
-      await client.post('fhir/R4', {
-        resourceType: 'Bundle',
-        type: 'transaction',
-        entry: availableIntervals.map(({ start, end }) => ({
+      if (!schedule) throw new Error('Schedule không khả dụng để tạo Slot.');
+      const seriesId = replaceSeries ? seriesIdToReplace! : crypto.randomUUID();
+      const transactionEntries = [
+        ...oldSeriesSlots.filter((slot) => slot.id).map((slot) => ({
+          resource: { ...slot, status: 'entered-in-error' },
+          request: {
+            method: 'PUT',
+            url: `Slot/${slot.id}`,
+            ifMatch: slot.meta?.versionId ? `W/\"${slot.meta.versionId}\"` : undefined,
+          },
+        })),
+        ...availableIntervals.map(({ start, end }) => ({
           resource: {
             resourceType: 'Slot',
             schedule: { reference: `Schedule/${schedule.id}` },
@@ -612,12 +644,25 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           },
           request: { method: 'POST', url: 'Slot' },
         })),
+      ];
+      if (transactionEntries.length > 100) {
+        setError(new Error('Thay đổi series vượt quá 100 thao tác. Hãy dùng khoảng ngày ngắn hơn.'));
+        return;
+      }
+      await client.post('fhir/R4', {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: transactionEntries,
       });
       const nextSeriesIds = [seriesId, ...recurringSeriesIds.filter((id) => id !== seriesId)].slice(0, 20);
       window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
       setRecurringSeriesIds(nextSeriesIds);
       setSelectedRecurringSeriesId(seriesId);
-      setMessage(`Đã thêm ${availableIntervals.length} khung giờ; bỏ qua ${intervals.length - availableIntervals.length} khung giờ bị trùng.`);
+      setMessage(
+        `${replaceSeries ? 'Đã cập nhật' : 'Đã thêm'} ${availableIntervals.length} khung giờ; bỏ qua ${
+          intervals.length - availableIntervals.length
+        } khung giờ bị trùng.`
+      );
       form.reset();
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -791,7 +836,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form className="panel editor" onSubmit={createRecurringAvailability}>
           <h2>Tạo khung giờ lặp</h2>
-          <p className="muted">Tạo Slot theo các ngày đã chọn, tối đa 100 khung giờ mỗi lần.</p>
+          <p className="muted">Tạo hoặc thay lịch lặp; mỗi transaction tối đa 100 thao tác.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
@@ -810,6 +855,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <label>Ngày kết thúc<input name="recurringEndDate" type="date" required /></label>
             <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required /></label>
             <label>Giờ kết thúc<input name="recurringEndTime" type="time" required /></label>
+            <label className="full-width">
+              <input name="replaceRecurringSeries" type="checkbox" disabled={recurringSeriesIds.length === 0} />
+              {' '}Thay các Slot còn trống trong tương lai của series đã chọn
+            </label>
             <fieldset className="full-width">
               <legend>Ngày trong tuần</legend>
               {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map((day, index) => (
