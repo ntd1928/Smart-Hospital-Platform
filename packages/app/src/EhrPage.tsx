@@ -337,6 +337,28 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!observationFrom || (effectiveDate && effectiveDate >= observationFrom))
       && (!observationTo || (effectiveDate && effectiveDate <= observationTo));
   });
+  function selectPatient(nextPatientId: string) {
+    setPatientId(nextPatientId);
+    setSelectedPatientRecord(patients.find((patient) => patient.id === nextPatientId));
+    setEncounters([]);
+    setConditions([]);
+    setObservations([]);
+    setAppointments([]);
+    setEncounterSearch('');
+    setEncounterStatusFilter('');
+    setEncounterFrom('');
+    setEncounterTo('');
+    setConditionSearch('');
+    setConditionClinicalStatus('');
+    setConditionVerificationStatus('');
+    setObservationSearch('');
+    setObservationCategory('');
+    setObservationFrom('');
+    setObservationTo('');
+    setError(undefined);
+    setMessage('');
+    setLoading(Boolean(nextPatientId));
+  }
   return (
     <>
       <div className="page-heading">
@@ -354,11 +376,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           </label>
           <label>
             Bệnh nhân
-            <select value={patientId} onChange={(event) => {
-              const nextPatientId = event.currentTarget.value;
-              setPatientId(nextPatientId);
-              setSelectedPatientRecord(patients.find((patient) => patient.id === nextPatientId));
-            }}>
+            <select value={patientId} onChange={(event) => selectPatient(event.currentTarget.value)}>
               <option value="">Chọn bệnh nhân</option>
               {selectedPatientRecord?.id === patientId && !patients.some((patient) => patient.id === patientId) && (
                 <option value={selectedPatientRecord.id}>{personName(selectedPatientRecord)}</option>
