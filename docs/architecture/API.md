@@ -13,7 +13,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | POST /admin/projects/:projectId/invite        | Admin tạo tài khoản/profile/membership        |
 | GET /fhir/R4/Patient?name=An                  | Admin xem toàn project; Doctor chỉ tìm Patient được gán qua generalPractitioner; Patient xem compartment cá nhân |
 | POST /fhir/R4/Patient                         | Admin tạo hồ sơ; Doctor không có quyền tạo Patient |
-| GET/PUT/DELETE /fhir/R4/Patient/:id           | Doctor chỉ đọc/cập nhật Patient được gán và không sửa generalPractitioner; Admin quản lý phân công/xóa mềm |
+| GET/PUT/DELETE /fhir/R4/Patient/:id           | Patient chỉ đọc/cập nhật hồ sơ mình, chỉ đổi phone/email/address; Doctor chỉ đọc/cập nhật Patient được gán; Admin quản lý phân công/xóa mềm |
 | GET /fhir/R4/Patient/:id/_history             | Lịch sử phiên bản                             |
 | /fhir/R4/Practitioner                         | CRUD/search tương tự                          |
 | /fhir/R4/Organization, HealthcareService      | Admin quản lý Khoa phân cấp và dịch vụ gắn với Khoa; Practitioner chỉ đọc qua policy |

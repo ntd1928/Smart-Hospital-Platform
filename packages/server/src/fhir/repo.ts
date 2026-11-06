@@ -2705,7 +2705,7 @@ export class Repository extends FhirRepository implements Disposable {
       // but that isn't currently enforced at write time, so exclude them here
       if (original && !field.includes('.') && !field.endsWith('[x]')) {
         const value = original[field as keyof T];
-        if (value) {
+        if (Object.prototype.hasOwnProperty.call(original, field)) {
           input[field as keyof T] = value;
         }
       }

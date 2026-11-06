@@ -160,7 +160,7 @@ export function App() {
               path="/doctors/new"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
             />
-            <Route path="/patients/:id/edit" element={role !== 'Patient' ? <PersonEditor type="Patient" /> : <Forbidden />} />
+            <Route path="/patients/:id/edit" element={<PatientEditorRoute role={role} profile={profile as Patient | Practitioner} />} />
             <Route
               path="/doctors/:id/edit"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
@@ -1569,6 +1569,7 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
   const [person, setPerson] = useState<Patient | Practitioner>();
   const [error, setError] = useState<unknown>();
   const role = getRole(client.getProjectMembership(), client.getProfile());
+  const profile = client.getProfile();
   const base = type === 'Patient' ? '/patients' : '/doctors';
   useEffect(() => {
     setPerson(undefined);
@@ -1584,7 +1585,7 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
       setError(e);
     }
   }
-  const canEdit = role === 'Admin' || (type === 'Patient' && role === 'Doctor');
+  const canEdit = role === 'Admin' || (type === 'Patient' && (role === 'Doctor' || (role === 'Patient' && id === profile?.id)));
   return (
     <>
       <PageTitle
@@ -1631,6 +1632,11 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
   );
 }
 
+function PatientEditorRoute({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }) {
+  const { id } = useParams();
+  return role !== 'Patient' || profile.id === id ? <PersonEditor type="Patient" /> : <Forbidden />;
+}
+
 function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
   const client = useMedplum();
   const { id } = useParams();
@@ -1639,7 +1645,9 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const profile = client.getProfile();
   const isAdmin = client.getProjectMembership()?.admin === true;
+  const isPatientSelf = type === 'Patient' && profile?.resourceType === 'Patient' && profile.id === id;
   const base = type === 'Patient' ? '/patients' : '/doctors';
   useEffect(() => {
     setPerson(undefined);
@@ -1657,24 +1665,42 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
     const data = new FormData(event.currentTarget);
     setBusy(true);
     setError(undefined);
-    const resource = {
-      ...person,
-      name: [{ family: String(data.get('family')).trim(), given: [String(data.get('given')).trim()] }],
-      gender: String(data.get('gender')) || undefined,
-      birthDate: String(data.get('birthDate')) || undefined,
-      telecom: [
+    const telecom = [
         { system: 'phone', value: String(data.get('phone')) },
         { system: 'email', value: String(data.get('email')) },
-      ].filter((t) => t.value),
-      address: [{ text: String(data.get('address')) }],
-      active: data.get('active') === 'on',
-      ...(type === 'Patient' && isAdmin ? {
+      ].filter((t) => t.value);
+    const address = [{ text: String(data.get('address')) }];
+    const existingTelecom = person.resourceType === 'Patient' ? person.telecom ?? [] : [];
+    const selfTelecom = [
+      ...existingTelecom.filter((contact) => contact.system !== 'phone' && contact.system !== 'email'),
+      ...(['phone', 'email'] as const).flatMap((system) => {
+        const existing = existingTelecom.filter((contact) => contact.system === system);
+        const value = String(data.get(system)).trim();
+        return value ? [{ ...existing[0], system, value }, ...existing.slice(1)] : existing.slice(1);
+      }),
+    ];
+    const existingAddresses = person.resourceType === 'Patient' ? person.address ?? [] : [];
+    const addressText = String(data.get('address')).trim();
+    const selfAddress = addressText
+      ? [{ ...(existingAddresses[0] ?? {}), text: addressText }, ...existingAddresses.slice(1)]
+      : existingAddresses.slice(1);
+    const resource = isPatientSelf
+      ? { ...person, telecom: selfTelecom, address: selfAddress } as Patient | Practitioner
+      : {
+        ...person,
+        name: [{ family: String(data.get('family')).trim(), given: [String(data.get('given')).trim()] }],
+        gender: String(data.get('gender')) || undefined,
+        birthDate: String(data.get('birthDate')) || undefined,
+        telecom,
+        address,
+        active: data.get('active') === 'on',
+        ...(type === 'Patient' && isAdmin ? {
         generalPractitioner: [
           ...(person.resourceType === 'Patient' ? person.generalPractitioner?.filter((reference) => !reference.reference?.startsWith('Practitioner/')) ?? [] : []),
           ...(data.get('generalPractitioner') ? [{ reference: `Practitioner/${String(data.get('generalPractitioner'))}` }] : []),
         ],
-      } : {}),
-    } as Patient | Practitioner;
+        } : {}),
+      } as Patient | Practitioner;
     try {
       const result = resource.id ? await client.updateResource(resource) : await client.createResource(resource);
       navigate(`${base}/${result.id}`);
@@ -1688,8 +1714,8 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
     <>
       <PageTitle
         eyebrow="PERSON RECORD"
-        title={`${id ? 'Chỉnh sửa' : 'Thêm'} ${type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}`}
-        description="Thông tin được kiểm tra và lưu trực tiếp qua FHIR API."
+        title={isPatientSelf ? 'Cập nhật thông tin liên hệ' : `${id ? 'Chỉnh sửa' : 'Thêm'} ${type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}`}
+        description={isPatientSelf ? 'Cập nhật điện thoại, email liên hệ và địa chỉ. Email đăng nhập không thay đổi.' : 'Thông tin được kiểm tra và lưu trực tiếp qua FHIR API.'}
       />
       <ErrorMessage error={error} />
       {person && (
@@ -1697,11 +1723,11 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
           <div className="form-grid">
             <label>
               Họ
-              <input name="family" required maxLength={100} defaultValue={person.name?.[0]?.family} />
+              <input name="family" required={!isPatientSelf} maxLength={100} readOnly={isPatientSelf} defaultValue={person.name?.[0]?.family} />
             </label>
             <label>
               Tên
-              <input name="given" required maxLength={100} defaultValue={person.name?.[0]?.given?.join(' ')} />
+              <input name="given" required={!isPatientSelf} maxLength={100} readOnly={isPatientSelf} defaultValue={person.name?.[0]?.given?.join(' ')} />
             </label>
             <label>
               Ngày sinh
@@ -1709,12 +1735,13 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
                 name="birthDate"
                 type="date"
                 max={new Date().toISOString().slice(0, 10)}
+                readOnly={isPatientSelf}
                 defaultValue={person.birthDate}
               />
             </label>
             <label>
               Giới tính
-              <select name="gender" defaultValue={person.gender ?? ''}>
+              <select name="gender" disabled={isPatientSelf} defaultValue={person.gender ?? ''}>
                 <option value="">Chưa xác định</option>
                 <option value="male">Nam</option>
                 <option value="female">Nữ</option>
@@ -1754,11 +1781,15 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
             </label>}
             <label className="full-width">
               Địa chỉ
-              <input name="address" maxLength={300} defaultValue={person.address?.[0]?.text} />
+              <input
+                name="address"
+                maxLength={300}
+                defaultValue={person.address?.[0]?.text ?? (isPatientSelf ? [...(person.address?.[0]?.line ?? []), person.address?.[0]?.city, person.address?.[0]?.district, person.address?.[0]?.state, person.address?.[0]?.postalCode, person.address?.[0]?.country].filter(Boolean).join(', ') : undefined)}
+              />
             </label>
           </div>
           <label className="checkbox">
-            <input name="active" type="checkbox" defaultChecked={person.active !== false} />
+            <input name="active" type="checkbox" disabled={isPatientSelf} defaultChecked={person.active !== false} />
             Đang hoạt động
           </label>
           <div className="form-actions">

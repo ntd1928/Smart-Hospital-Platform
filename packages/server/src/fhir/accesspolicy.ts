@@ -149,6 +149,8 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   const profileReference = getReferenceString(membership.profile);
   if (!membership.admin && profileReference?.startsWith('Practitioner/')) {
     accessPolicy = restrictPractitionerPatientAccess(accessPolicy, profileReference);
+  } else if (!membership.admin && profileReference?.startsWith('Patient/')) {
+    accessPolicy = restrictPatientSelfServiceAccess(accessPolicy, profileReference);
   }
 
   if (login.scope) {
@@ -214,6 +216,57 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       } else {
         resourcePolicies.push(scopedRule);
       }
+    }
+  }
+  return { ...accessPolicy, resource: resourcePolicies };
+}
+
+const patientSelfServiceReadonlyFields = [
+  'resourceType', 'id', '_id', 'meta', 'implicitRules', '_implicitRules', 'language', '_language', 'text', 'contained',
+  'extension', 'modifierExtension', 'identifier', 'active', '_active', 'name', '_name', 'gender', '_gender',
+  'birthDate', '_birthDate', 'deceasedBoolean', '_deceasedBoolean', 'deceasedDateTime', '_deceasedDateTime',
+  'maritalStatus', '_maritalStatus', 'multipleBirthBoolean', '_multipleBirthBoolean', 'multipleBirthInteger',
+  '_multipleBirthInteger', 'photo', 'contact', 'communication', 'generalPractitioner', 'managingOrganization', 'link',
+];
+
+/**
+ * Restricts Patient profile edits to contact details on the authenticated Patient resource.
+ * @param accessPolicy - The populated access policy for the login.
+ * @param patientReference - The authenticated Patient reference.
+ * @returns An access policy limited to reading/searching and updating the patient's own contact data.
+ */
+function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, patientReference: string): PopulatedAccessPolicy {
+  const resourcePolicies: AccessPolicyResource[] = [];
+  for (const rule of accessPolicy.resource) {
+    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
+    for (const resourceType of resourceTypes) {
+      if (resourceType !== 'Patient') {
+        resourcePolicies.push({
+          ...rule,
+          resourceType,
+          criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
+        });
+        continue;
+      }
+      const baseCriteria = rule.criteria?.replace(/^\*\?/, 'Patient?');
+      const queryIndex = baseCriteria?.indexOf('?') ?? -1;
+      const baseQuery = queryIndex >= 0 ? baseCriteria?.slice(queryIndex + 1) : undefined;
+      const compartment = rule.compartment ? resolveId(rule.compartment) : undefined;
+      const criteria = [baseQuery, ...(compartment ? [`_compartment=${encodeURIComponent(compartment)}`] : []), `_id=${encodeURIComponent(resolveId({ reference: patientReference }) ?? '')}`]
+        .filter(Boolean)
+        .join('&');
+      const selfRule: AccessPolicyResource = {
+        ...rule,
+        resourceType: 'Patient',
+        criteria: `Patient?${criteria}`,
+        compartment: undefined,
+        readonlyFields: [...new Set([...(rule.readonlyFields ?? []), ...patientSelfServiceReadonlyFields])],
+      };
+      if (!selfRule.readonly) {
+        const interactions = selfRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
+        selfRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'delete');
+      }
+      resourcePolicies.push(selfRule);
     }
   }
   return { ...accessPolicy, resource: resourcePolicies };
