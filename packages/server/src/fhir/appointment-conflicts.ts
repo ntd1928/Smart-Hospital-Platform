@@ -77,3 +77,12 @@ export async function findAppointmentForSlot(
   });
   return match;
 }
+
+/** Finds an active Appointment that still depends on the Slot being bookable. */
+export async function findActiveAppointmentForSlot(repo: Repository, slotId: string): Promise<Appointment | undefined> {
+  let match: Appointment | undefined;
+  await repo.processAllResources<Appointment>({ resourceType: 'Appointment', slot: `Slot/${slotId}` }, async (appointment) => {
+    if (!nonBlockingStatuses.has(appointment.status ?? '')) match = appointment;
+  });
+  return match;
+}
