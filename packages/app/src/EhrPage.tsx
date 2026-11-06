@@ -474,6 +474,35 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function markObservationEnteredInError(observation: Observation, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!observation.id || observation.status === 'entered-in-error') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('observationErrorReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Observation>({
+        ...observation,
+        status: 'entered-in-error',
+        note: [...(observation.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Kết quả được đánh dấu nhập nhầm; dữ liệu gốc được giữ để truy vết. Lý do: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã đánh dấu kết quả nhập nhầm và lưu lý do.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createMedicationRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1337,7 +1366,8 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{observation.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
                 <td>{observation.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
-                {role !== 'Patient' && <td>{observation.status !== 'entered-in-error' ? <details>
+                {role !== 'Patient' && <td>{observation.status !== 'entered-in-error' ? <>
+                  <details>
                   <summary>Sửa kết quả</summary>
                   <form className="editor" onSubmit={(event) => void amendObservation(observation, event)}>
                     <label>Chỉ số<input name="observationUpdatedCode" maxLength={200} defaultValue={observation.code.text ?? observation.code.coding?.[0]?.display ?? ''} required /></label>
@@ -1348,7 +1378,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                     <label>Lý do sửa<textarea name="observationAmendmentReason" maxLength={500} rows={2} required /></label>
                     <button className="button" disabled={saving}>Lưu bản sửa</button>
                   </form>
-                </details> : '—'}</td>}
+                  </details>
+                  <details>
+                    <summary>Đánh dấu nhập nhầm</summary>
+                    <form className="editor" onSubmit={(event) => void markObservationEnteredInError(observation, event)}>
+                      <label>Lý do<textarea name="observationErrorReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                    </form>
+                  </details>
+                </> : '—'}</td>}
               </tr>
             );
           })}</tbody>
