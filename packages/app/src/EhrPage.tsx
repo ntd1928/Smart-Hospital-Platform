@@ -78,6 +78,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const data = new FormData(form);
     const start = new Date(`${String(data.get('encounterDate'))}T${String(data.get('encounterTime'))}`);
     const reason = String(data.get('encounterReason')).trim();
+    const clinicalNote = String(data.get('encounterNote') ?? '').trim();
     if (!patientId || !reason || !Number.isFinite(start.getTime())) {
       setError(new Error('Chọn bệnh nhân, thời gian và lý do khám hợp lệ.'));
       return;
@@ -95,6 +96,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         appointment: appointmentId ? [{ reference: `Appointment/${appointmentId}` }] : undefined,
         period: { start: start.toISOString() },
         reasonCode: [{ text: reason }],
+        note: clinicalNote ? [{ time: new Date().toISOString(), text: clinicalNote }] : undefined,
       });
       setMessage('Đã tạo lần khám.');
       form.reset();
@@ -296,6 +298,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </select>
             </label>
             <label className="full-width">Lý do khám<input name="encounterReason" maxLength={200} required /></label>
+            <label className="full-width">Ghi chú diễn biến<textarea name="encounterNote" maxLength={4000} rows={4} /></label>
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>
@@ -374,12 +377,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <h2>Lần khám</h2>
         {encounters.length ? (
           <div className="table-wrap"><table>
-            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th><th>Appointment</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th><th>Ghi chú diễn biến</th><th>Appointment</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
             <tbody>{encounters.map((encounter) => (
               <tr key={encounter.id}>
                 <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
                 <td>{encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || '—'}</td>
+                <td>{encounter.note?.map((note) => note.text).filter(Boolean).join('\n') || '—'}</td>
                 <td>{encounter.appointment?.map((reference) => {
                   const appointment = appointments.find((item) => reference.reference === `Appointment/${item.id}`);
                   return appointment?.start ? new Date(appointment.start).toLocaleString('vi-VN') : reference.display ?? reference.reference;
