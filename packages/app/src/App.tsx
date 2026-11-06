@@ -561,10 +561,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         client.searchResources('Appointment', { actor: practitionerReference, _count: '1000' }),
         client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
       ]);
-      let schedule = practitionerSchedules.find((item) => item.active !== false);
-      const existingSlots = schedule
-        ? await client.searchResources('Slot', { schedule: `Schedule/${schedule.id}`, _count: '1000' })
-        : [];
+      const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
+      let schedule = activeSchedules[0];
+      const existingSlots = (
+        await Promise.all(
+          activeSchedules.map((item) =>
+            client.searchResources('Slot', { schedule: `Schedule/${item.id}`, _count: '1000' })
+          )
+        )
+      ).flat();
       const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots).filter(
         ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
       );
