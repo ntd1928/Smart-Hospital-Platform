@@ -6,7 +6,7 @@ flowchart TD
   WEB --> SDK[Medplum SDK + SignInForm]
   SDK --> API[Express :8103]
   API --> AUTH[Auth PKCE / token / membership]
-  API --> FHIR[FHIR Router: Patient / Practitioner / Schedule / Slot / Appointment]
+  API --> FHIR[FHIR Router: Patient / Practitioner / Schedule / Slot / Appointment / Encounter / Condition / Observation]
   AUTH --> REPO[Repository + AccessPolicy + validation]
   FHIR --> REPO
   REPO --> PG[(PostgreSQL 16)]
@@ -21,7 +21,7 @@ User chứa tài khoản và password bcrypt hash. ProjectMembership nối User,
 
 Appointment.participant.actor tham chiếu Patient/Practitioner và Appointment.slot có thể tham chiếu Slot. Schedule gắn Slot với Practitioner; repository kiểm tra khoảng thời gian chồng lấn giữa Appointment, giữa Slot trên các Schedule active của cùng Practitioner và giữa Slot với Appointment active, dùng transaction lock theo Practitioner. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
 
-Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR chưa triển khai.
+Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. API FHIR đã mở Encounter, Condition và Observation; giao diện và workflow EHR, liên kết Encounter với Appointment đã khám, và lưu tài liệu cloud chưa triển khai. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR.
 
 ## Auth và quyền
 
