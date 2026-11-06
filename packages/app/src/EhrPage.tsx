@@ -26,6 +26,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [encounterStatusFilter, setEncounterStatusFilter] = useState('');
   const [encounterFrom, setEncounterFrom] = useState('');
   const [encounterTo, setEncounterTo] = useState('');
+  const [conditionSearch, setConditionSearch] = useState('');
+  const [conditionClinicalStatus, setConditionClinicalStatus] = useState('');
+  const [conditionVerificationStatus, setConditionVerificationStatus] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -300,6 +303,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!encounterFrom || (startDate && startDate >= encounterFrom))
       && (!encounterTo || (startDate && startDate <= encounterTo));
   });
+  const conditionQuery = conditionSearch.trim().toLocaleLowerCase();
+  const filteredConditions = conditions.filter((condition) => {
+    const code = condition.code?.text ?? condition.code?.coding?.[0]?.display ?? '';
+    return (!conditionQuery || code.toLocaleLowerCase().includes(conditionQuery))
+      && (!conditionClinicalStatus || condition.clinicalStatus?.coding?.[0]?.code === conditionClinicalStatus)
+      && (!conditionVerificationStatus || condition.verificationStatus?.coding?.[0]?.code === conditionVerificationStatus);
+  });
   return (
     <>
       <div className="page-heading">
@@ -467,9 +477,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Chẩn đoán</h2>
-        {conditions.length ? <div className="table-wrap"><table>
+        <div className="form-grid">
+          <label className="full-width">Tìm chẩn đoán
+            <input value={conditionSearch} onChange={(event) => setConditionSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái lâm sàng
+            <select value={conditionClinicalStatus} onChange={(event) => setConditionClinicalStatus(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="active">Đang hoạt động</option>
+              <option value="resolved">Đã giải quyết</option>
+              <option value="inactive">Không hoạt động</option>
+              <option value="remission">Thuyên giảm</option>
+            </select>
+          </label>
+          <label>Trạng thái xác minh
+            <select value={conditionVerificationStatus} onChange={(event) => setConditionVerificationStatus(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="confirmed">Đã xác nhận</option>
+              <option value="provisional">Tạm thời</option>
+              <option value="unconfirmed">Chưa xác minh</option>
+              <option value="differential">Chẩn đoán phân biệt</option>
+              <option value="refuted">Bác bỏ</option>
+            </select>
+          </label>
+        </div>
+        {filteredConditions.length ? <div className="table-wrap"><table>
           <thead><tr><th>Chẩn đoán</th><th>Trạng thái lâm sàng</th><th>Xác minh</th><th>Ngày giải quyết</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
-          <tbody>{conditions.map((condition) => {
+          <tbody>{filteredConditions.map((condition) => {
             const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
             return (
               <tr key={condition.id}>
@@ -485,7 +519,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có chẩn đoán trong phạm vi truy cập.</p>}
+        </table></div> : <p className="empty">{conditions.length ? 'Không có chẩn đoán phù hợp với bộ lọc.' : 'Chưa có chẩn đoán trong phạm vi truy cập.'}</p>}
       </section>
       <section className="panel">
         <h2>Kết quả</h2>
