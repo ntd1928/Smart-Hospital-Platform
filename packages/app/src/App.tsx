@@ -727,15 +727,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           schedule: `Schedule/${scheduleId}`,
           status: 'free',
           start: `ge${new Date().toISOString()}`,
-          _count: '100',
+          _count: '1000',
         }),
       ]);
       if (schedule.active === false) {
         setError(new Error('Schedule đã được tắt.'));
         return;
       }
-      if (futureFreeSlots.length > 99) {
-        setError(new Error('Schedule cần hơn 100 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
+      if (futureFreeSlots.length > 999) {
+        setError(new Error('Schedule cần hơn 1.000 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
         return;
       }
       const entries = [
