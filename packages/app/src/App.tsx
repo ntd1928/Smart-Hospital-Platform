@@ -596,7 +596,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         ? activeSchedules.find((item) => `Schedule/${item.id}` === oldSeriesSlots[0]?.schedule?.reference)
         : activeSchedules[0];
       if (replaceSeries && !schedule) {
-        setError(new Error('Không tìm thấy Schedule đang hoạt động của series đã chọn.'));
+        setError(new Error('Series không thuộc bác sĩ đã chọn hoặc Schedule của series đã ngừng hoạt động.'));
         return;
       }
       const existingSlots = (
