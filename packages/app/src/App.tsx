@@ -373,28 +373,35 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         setError(new Error(`Bác sĩ đã có lịch hẹn bắt đầu lúc ${conflictTime}.`));
         return;
       }
-      const created = await client.createResource<Appointment>({
-        resourceType: 'Appointment',
-        status: 'booked',
-        description: String(data.get('description')).trim() || undefined,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        slot: [{ reference: `Slot/${slot.id}` }],
-        participant: [
-          { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
-          { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
+      await client.post('fhir/R4', {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          {
+            resource: { ...currentSlot, status: 'busy' },
+            request: {
+              method: 'PUT',
+              url: `Slot/${slot.id}`,
+              ifMatch: currentSlot.meta?.versionId ? `W/"${currentSlot.meta.versionId}"` : undefined,
+            },
+          },
+          {
+            resource: {
+              resourceType: 'Appointment',
+              status: 'booked',
+              description: String(data.get('description')).trim() || undefined,
+              start: start.toISOString(),
+              end: end.toISOString(),
+              slot: [{ reference: `Slot/${slot.id}` }],
+              participant: [
+                { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
+                { actor: { reference: `Practitioner/${practitionerId}` }, status: 'accepted' },
+              ],
+            },
+            request: { method: 'POST', url: 'Appointment' },
+          },
         ],
       });
-      try {
-        await client.updateResource({ ...currentSlot, status: 'busy' });
-      } catch (slotError) {
-        try {
-          if (created.id) await client.deleteResource('Appointment', created.id);
-        } catch {
-          throw new Error(`Lịch đã được tạo nhưng không thể đánh dấu hoặc hoàn tác Slot ${slot.id}.`);
-        }
-        throw slotError;
-      }
       setMessage('Đã tạo lịch hẹn và đánh dấu khung giờ bận.');
       form.reset();
       setRefresh((value) => value + 1);
