@@ -17,4 +17,6 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - Definitions, bảng schema và kiểu dùng chung còn có resource của các tuần sau. API whitelist mở Organization/HealthcareService và Encounter/Condition/Observation/MedicationRequest/MedicationStatement/MedicationAdministration/AllergyIntolerance và app có danh mục khoa cùng giao diện EHR cơ bản; form Encounter hỗ trợ tham chiếu Appointment đã hoàn tất; kiểm tra tương tác thuốc-dị ứng, tính nhất quán, upload tài liệu và các workflow lâm sàng đầy đủ chưa triển khai.
 - Lint tập trung code nhóm; code kế thừa được typecheck/build và kiểm thử tích hợp. Format có thể làm hash khác bản gốc dù logic giữ nguyên.
 
+- Form EHR ghi dấu hiệu sinh tồn bằng Observation LOINC/UCUM; huyết áp giữ hai component tâm thu/tâm trương trong một resource. Một lượt ghi gửi tất cả Observation trong FHIR transaction; UI hỗ trợ đọc và sửa component huyết áp.
+
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

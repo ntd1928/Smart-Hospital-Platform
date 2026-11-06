@@ -28,5 +28,7 @@ CI được cấu hình cho pull request và push vào main/develop: quality gat
 
 Credentials demo chỉ phục vụ localhost và runner CI dùng dữ liệu giả; token và mật khẩu môi trường thật không được commit. Trước thao tác Git, kiểm tra git status và yêu cầu hiện hành.
 
+EHR ghi dấu hiệu sinh tồn thành Observation theo mã LOINC và UCUM; huyết áp dùng component tâm thu/tâm trương. Các Observation trong một lần nhập được gửi bằng FHIR transaction. Staff sửa được thành phần huyết áp hoặc chỉ số khác với status amended và lý do audit; bảng lịch sử hiển thị cả Observation dạng component.
+
 
 

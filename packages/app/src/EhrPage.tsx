@@ -458,6 +458,84 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createVitalSigns(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!patientId) {
+      setError(new Error('Chọn bệnh nhân trước khi ghi dấu hiệu sinh tồn.'));
+      return;
+    }
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const measuredAt = String(data.get('vitalDateTime') ?? '');
+    const encounterId = String(data.get('vitalEncounter') ?? '');
+    const systolic = String(data.get('vitalSystolic') ?? '').trim();
+    const diastolic = String(data.get('vitalDiastolic') ?? '').trim();
+    const fields = [
+      { name: 'vitalHeartRate', code: '8867-4', display: 'Heart rate', text: 'Nhịp tim', unit: 'lần/phút', ucum: '/min' },
+      { name: 'vitalRespiratoryRate', code: '9279-1', display: 'Respiratory rate', text: 'Nhịp thở', unit: 'lần/phút', ucum: '/min' },
+      { name: 'vitalTemperature', code: '8310-5', display: 'Body temperature', text: 'Nhiệt độ cơ thể', unit: '°C', ucum: 'Cel' },
+      { name: 'vitalWeight', code: '29463-7', display: 'Body weight', text: 'Cân nặng', unit: 'kg', ucum: 'kg' },
+      { name: 'vitalHeight', code: '8302-2', display: 'Body height', text: 'Chiều cao', unit: 'cm', ucum: 'cm' },
+    ];
+    const values = fields.map((field) => ({ ...field, raw: String(data.get(field.name) ?? '').trim() }))
+      .filter((field) => field.raw)
+      .map((field) => ({ ...field, value: Number(field.raw) }));
+    const hasBloodPressure = Boolean(systolic || diastolic);
+    if (!Number.isFinite(new Date(measuredAt).getTime()) || (!!systolic !== !!diastolic) ||
+      values.some((field) => !Number.isFinite(field.value) || (field.name !== 'vitalTemperature' && field.value <= 0)) ||
+      (hasBloodPressure && (![systolic, diastolic].every((value) => Number.isFinite(Number(value)) && Number(value) > 0))) ||
+      (!values.length && !hasBloodPressure) ||
+      (encounterId && !encounters.some((encounter) => encounter.id === encounterId && encounter.status === 'in-progress'))) {
+      setError(new Error('Nhập ít nhất một giá trị dương hợp lệ; huyết áp cần đủ tâm thu và tâm trương, thời điểm và lần khám phải hợp lệ.'));
+      return;
+    }
+
+    const effectiveDateTime = new Date(measuredAt).toISOString();
+    const common = {
+      resourceType: 'Observation' as const,
+      status: 'final' as const,
+      category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'vital-signs', display: 'Vital Signs' }] }],
+      subject: { reference: `Patient/${patientId}` },
+      encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+      effectiveDateTime,
+    };
+    const observations: Observation[] = values.map((field) => ({
+      ...common,
+      code: { coding: [{ system: 'http://loinc.org', code: field.code, display: field.display }], text: field.text },
+      valueQuantity: { value: field.value, unit: field.unit, system: 'http://unitsofmeasure.org', code: field.ucum },
+    }));
+    if (hasBloodPressure) {
+      observations.push({
+        ...common,
+        code: { coding: [{ system: 'http://loinc.org', code: '85354-9', display: 'Blood pressure panel with all children optional' }], text: 'Huyết áp' },
+        component: [
+          { code: { coding: [{ system: 'http://loinc.org', code: '8480-6', display: 'Systolic blood pressure' }], text: 'Tâm thu' }, valueQuantity: { value: Number(systolic), unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' } },
+          { code: { coding: [{ system: 'http://loinc.org', code: '8462-4', display: 'Diastolic blood pressure' }], text: 'Tâm trương' }, valueQuantity: { value: Number(diastolic), unit: 'mmHg', system: 'http://unitsofmeasure.org', code: 'mm[Hg]' } },
+        ],
+      });
+    }
+
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      await client.post('fhir/R4', {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: observations.map((observation) => ({ resource: observation, request: { method: 'POST', url: 'Observation' } })),
+      });
+      const latest: Observation[] = [];
+      for await (const page of client.searchResourcePages('Observation', { patient: `Patient/${patientId}`, _count: '100', _sort: '-date' })) latest.push(...page);
+      setObservations(latest);
+      setMessage(`Đã lưu ${observations.length} Observation dấu hiệu sinh tồn trong một transaction.`);
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function amendObservation(observation: Observation, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!observation.id) return;
@@ -466,15 +544,24 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const code = String(data.get('observationUpdatedCode') ?? '').trim();
     const dateTime = String(data.get('observationUpdatedDateTime') ?? '');
     const numericValue = String(data.get('observationUpdatedNumericValue') ?? '').trim();
+    const systolicValue = String(data.get('observationUpdatedSystolic') ?? '').trim();
+    const diastolicValue = String(data.get('observationUpdatedDiastolic') ?? '').trim();
     const textValue = String(data.get('observationUpdatedTextValue') ?? '').trim();
     const unit = String(data.get('observationUpdatedUnit') ?? '').trim();
     const reason = String(data.get('observationAmendmentReason') ?? '').trim();
-    if (!code || !dateTime || !Number.isFinite(new Date(dateTime).getTime()) || (!!numericValue === !!textValue) || (numericValue && !Number.isFinite(Number(numericValue))) || !reason) {
-      setError(new Error('Nhập chỉ số, thời điểm, đúng một giá trị hợp lệ và lý do sửa kết quả.'));
+    const systolicComponent = observation.component?.find((component) => component.code.coding?.some((coding) => coding.code === '8480-6'));
+    const diastolicComponent = observation.component?.find((component) => component.code.coding?.some((coding) => coding.code === '8462-4'));
+    const isBloodPressure = !!systolicComponent && !!diastolicComponent;
+    if ((!isBloodPressure && !code) || !dateTime || !Number.isFinite(new Date(dateTime).getTime()) || (isBloodPressure
+      ? (!systolicValue || !diastolicValue || !Number.isFinite(Number(systolicValue)) || !Number.isFinite(Number(diastolicValue)))
+      : ((!!numericValue === !!textValue) || (numericValue && !Number.isFinite(Number(numericValue))))) || !reason) {
+      setError(new Error('Nhập thời điểm, giá trị hợp lệ và lý do sửa kết quả.'));
       return;
     }
-    const previousValue = observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}`.trim() : observation.valueString ?? 'Chưa có giá trị';
-    const nextValue = numericValue ? `${Number(numericValue)} ${unit}`.trim() : textValue;
+    const previousValue = formatObservationValue(observation);
+    const nextValue = isBloodPressure
+      ? `Tâm thu ${Number(systolicValue)} ${systolicComponent.valueQuantity?.unit ?? 'mmHg'}; tâm trương ${Number(diastolicValue)} ${diastolicComponent.valueQuantity?.unit ?? 'mmHg'}`
+      : numericValue ? `${Number(numericValue)} ${unit}`.trim() : textValue;
     setSaving(true);
     setError(undefined);
     setMessage('');
@@ -482,9 +569,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const updated = await client.updateResource<Observation>({
         ...observation,
         status: 'amended',
-        code: { text: code },
+        code: isBloodPressure ? observation.code : { text: code },
         effectiveDateTime: new Date(dateTime).toISOString(),
-        ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
+        ...(isBloodPressure ? {
+          component: observation.component?.map((component) => {
+            const coding = component.code.coding?.[0];
+            if (coding?.code === '8480-6') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(systolicValue) } };
+            if (coding?.code === '8462-4') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(diastolicValue) } };
+            return component;
+          }),
+        } : numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
         note: [...(observation.note ?? []), {
           time: new Date().toISOString(),
           text: `Kết quả được sửa: ${previousValue} → ${nextValue}. Lý do: ${reason}`,
@@ -499,6 +593,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     } finally {
       setSaving(false);
     }
+  }
+
+  function formatObservationValue(observation: Observation): string {
+    if (observation.valueString) return observation.valueString;
+    if (observation.valueQuantity) return `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}`.trim();
+    if (observation.component?.length) return observation.component.map((component) => `${component.code.text ?? component.code.coding?.[0]?.display ?? 'Componente'}: ${component.valueQuantity?.value ?? '—'} ${component.valueQuantity?.unit ?? ''}`.trim()).join('; ');
+    return '—';
   }
 
   async function markObservationEnteredInError(observation: Observation, event: FormEvent<HTMLFormElement>) {
@@ -1076,7 +1177,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         {medicationRequests.some((request) => request.status === 'active') && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{medicationRequests.filter((request) => request.status === 'active').map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
         <h2>Kết quả gần đây</h2>
         {observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).length
-          ? <ul>{observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : 'Chưa có giá trị')} · {observation.status}</li>)}</ul>
+          ? <ul>{observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {formatObservationValue(observation)} · {observation.status}</li>)}</ul>
           : <p>Chưa ghi nhận.</p>}
         <h2>Lần khám gần đây</h2>
         {encounters.slice(0, 10).length
@@ -1197,6 +1298,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             <button className="button primary" disabled={saving || !patientId}>
               {saving ? 'Đang lưu…' : 'Lưu chẩn đoán'}
             </button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createVitalSigns}>
+          <h2>Ghi dấu hiệu sinh tồn</h2>
+          <p className="muted">Lưu chỉ số bằng mã LOINC và đơn vị UCUM. Hệ thống không tự đánh giá ngưỡng lâm sàng.</p>
+          <div className="form-grid">
+            <label>Thời điểm đo<input name="vitalDateTime" type="datetime-local" defaultValue={localDateTimeInput(new Date().toISOString())} required /></label>
+            <label>Lần khám đang diễn ra (tùy chọn)
+              <select name="vitalEncounter" defaultValue="">
+                <option value="">Không liên kết</option>
+                {encounters.filter((encounter) => encounter.status === 'in-progress').map((encounter) => (
+                  <option key={encounter.id} value={encounter.id}>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : encounter.id}</option>
+                ))}
+              </select>
+            </label>
+            <label>Huyết áp tâm thu<input name="vitalSystolic" type="number" min="0.1" step="any" placeholder="mmHg" /></label>
+            <label>Huyết áp tâm trương<input name="vitalDiastolic" type="number" min="0.1" step="any" placeholder="mmHg" /></label>
+            <label>Nhịp tim<input name="vitalHeartRate" type="number" min="0.1" step="any" placeholder="lần/phút" /></label>
+            <label>Nhịp thở<input name="vitalRespiratoryRate" type="number" min="0.1" step="any" placeholder="lần/phút" /></label>
+            <label>Nhiệt độ<input name="vitalTemperature" type="number" step="any" placeholder="°C" /></label>
+            <label>Cân nặng<input name="vitalWeight" type="number" min="0.1" step="any" placeholder="kg" /></label>
+            <label>Chiều cao<input name="vitalHeight" type="number" min="0.1" step="any" placeholder="cm" /></label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu dấu hiệu sinh tồn'}</button>
           </div>
         </form>
       )}
@@ -1562,7 +1690,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleString('vi-VN') : '—'}</td>
                 <td>{observation.category?.[0]?.coding?.[0]?.display ?? observationCategoryLabels[observation.category?.[0]?.coding?.[0]?.code ?? ''] ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
-                <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
+                <td>{formatObservationValue(observation)}</td>
                 <td>{observation.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
                 <td>{observation.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
@@ -1570,11 +1698,18 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   <details>
                   <summary>Sửa kết quả</summary>
                   <form className="editor" onSubmit={(event) => void amendObservation(observation, event)}>
-                    <label>Chỉ số<input name="observationUpdatedCode" maxLength={200} defaultValue={observation.code.text ?? observation.code.coding?.[0]?.display ?? ''} required /></label>
+                    {observation.component?.some((component) => component.code.coding?.some((coding) => coding.code === '8480-6'))
+                      ? <>
+                        <label>Tâm thu<input name="observationUpdatedSystolic" type="number" min="0.1" step="any" defaultValue={observation.component.find((component) => component.code.coding?.some((coding) => coding.code === '8480-6'))?.valueQuantity?.value ?? ''} required /></label>
+                        <label>Tâm trương<input name="observationUpdatedDiastolic" type="number" min="0.1" step="any" defaultValue={observation.component.find((component) => component.code.coding?.some((coding) => coding.code === '8462-4'))?.valueQuantity?.value ?? ''} required /></label>
+                      </>
+                      : <label>Chỉ số<input name="observationUpdatedCode" maxLength={200} defaultValue={observation.code.text ?? observation.code.coding?.[0]?.display ?? ''} required /></label>}
                     <label>Thời điểm<input name="observationUpdatedDateTime" type="datetime-local" defaultValue={localDateTimeInput(observation.effectiveDateTime)} required /></label>
-                    <label>Giá trị số<input name="observationUpdatedNumericValue" type="number" step="any" defaultValue={observation.valueQuantity?.value ?? ''} /></label>
-                    <label>Đơn vị<input name="observationUpdatedUnit" maxLength={40} defaultValue={observation.valueQuantity?.unit ?? ''} /></label>
-                    <label>Giá trị văn bản<input name="observationUpdatedTextValue" maxLength={200} defaultValue={observation.valueString ?? ''} /></label>
+                    {!observation.component?.some((component) => component.code.coding?.some((coding) => coding.code === '8480-6')) && <>
+                      <label>Giá trị số<input name="observationUpdatedNumericValue" type="number" step="any" defaultValue={observation.valueQuantity?.value ?? ''} /></label>
+                      <label>Đơn vị<input name="observationUpdatedUnit" maxLength={40} defaultValue={observation.valueQuantity?.unit ?? ''} /></label>
+                      <label>Giá trị văn bản<input name="observationUpdatedTextValue" maxLength={200} defaultValue={observation.valueString ?? ''} /></label>
+                    </>}
                     <label>Lý do sửa<textarea name="observationAmendmentReason" maxLength={500} rows={2} required /></label>
                     <button className="button" disabled={saving}>Lưu bản sửa</button>
                   </form>
