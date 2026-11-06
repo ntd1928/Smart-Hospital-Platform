@@ -67,6 +67,7 @@ import type {
   Reference,
   Resource,
   ResourceType,
+  Slot,
 } from '@medplum/fhirtypes';
 import assert from 'node:assert';
 import { randomUUID } from 'node:crypto';
@@ -105,7 +106,7 @@ import {
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
 import { FhirQuotaCost } from './fhirquota';
-import { findAppointmentConflict, getAppointmentPractitionerReferences } from './appointment-conflicts';
+import { findAppointmentConflict, findSlotConflict, getAppointmentPractitionerReferences } from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
@@ -578,12 +579,19 @@ export class Repository extends FhirRepository implements Disposable {
     try {
       const authenticatedAppointment =
         resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSlot =
+        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       const result = authenticatedAppointment
         ? await this.withAppointmentWrite(resourceWithId, async (repo) => {
             await repo.ensureNoAppointmentConflict(resourceWithId);
             return repo.updateResourceImpl(resourceWithId, true);
           })
-        : await this.updateResourceImpl(resourceWithId, true);
+        : authenticatedSlot
+          ? await this.withSlotWrite(resourceWithId, async (repo) => {
+              await repo.ensureNoSlotConflict(resourceWithId);
+              return repo.updateResourceImpl(resourceWithId, true);
+            })
+          : await this.updateResourceImpl(resourceWithId, true);
       const durationMs = Date.now() - startTime;
 
       await this.postCommit(async () => {
@@ -951,10 +959,17 @@ export class Repository extends FhirRepository implements Disposable {
       let result: WithId<T>;
       const authenticatedAppointment =
         resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
+      const authenticatedSlot =
+        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
       if (authenticatedAppointment) {
         result = await this.withAppointmentWrite(resource, async (repo) => {
           await repo.ensureAppointmentCancellationAllowed(resource);
           await repo.ensureNoAppointmentConflict(resource, resource.id);
+          return repo.updateResourceImpl(resource, false, options);
+        });
+      } else if (authenticatedSlot) {
+        result = await this.withSlotWrite(resource, async (repo) => {
+          await repo.ensureNoSlotConflict(resource, resource.id);
           return repo.updateResourceImpl(resource, false, options);
         });
       } else if (options?.ifMatch) {
@@ -994,6 +1009,47 @@ export class Repository extends FhirRepository implements Disposable {
         ],
       });
     }
+  }
+
+  private async ensureNoSlotConflict(resource: Resource, excludeId?: string): Promise<void> {
+    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
+    if (await findSlotConflict(this, resource as Slot, excludeId)) {
+      throw new OperationOutcomeError({
+        resourceType: 'OperationOutcome',
+        issue: [
+          {
+            severity: 'error',
+            code: 'conflict',
+            details: { text: 'Schedule already has an overlapping Slot.' },
+          },
+        ],
+      });
+    }
+  }
+
+  private async withSlotWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
+    const run = async (repo: this): Promise<TResult> => {
+      await repo.lockSlotSchedule(resource);
+      return callback(repo);
+    };
+    if (this.transaction) return run(this);
+    return this.withTransaction(run, {
+      resourceTypes: 'Slot',
+      isolationLevel: 'READ COMMITTED',
+      source: 'repo.slotWrite',
+    });
+  }
+
+  private async lockSlotSchedule(resource: Resource): Promise<void> {
+    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
+    const projectId = this.currentProject()?.id;
+    const scheduleReference = (resource as Slot).schedule?.reference;
+    if (!projectId || !scheduleReference) return;
+    await this.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${projectId}:${scheduleReference}`],
+      { resourceTypes: 'Slot', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSlotSchedule' }
+    );
   }
 
   private async ensureAppointmentCancellationAllowed(resource: Resource): Promise<void> {
@@ -2595,7 +2651,9 @@ export class Repository extends FhirRepository implements Disposable {
   ): Promise<TResult> {
     this.assertUsable();
     const transactionOptions =
-      !options.isolationLevel && !options.serializable && normalizeResourceTypes(options.resourceTypes).has('Appointment')
+      !options.isolationLevel &&
+      !options.serializable &&
+      ['Appointment', 'Slot'].some((resourceType) => normalizeResourceTypes(options.resourceTypes).has(resourceType))
         ? { ...options, serializable: true }
         : options;
     // Resolving up front is what binds the transaction to a shard: BEGIN must be sent to one
