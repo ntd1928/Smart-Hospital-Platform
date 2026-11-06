@@ -11,7 +11,7 @@ import {
   parseSearchRequest,
 } from '@medplum/core';
 import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
-import type { Appointment, Bundle, Practitioner, Reference, Schedule, Slot } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, HealthcareService, Organization, Practitioner, PractitionerRole, Reference, Schedule, Slot } from '@medplum/fhirtypes';
 import { getAuthenticatedContext } from '../../context';
 import { findActiveAppointmentForSlot, findAppointmentConflict } from '../appointment-conflicts';
 import type { SystemRepository } from '../repo';
@@ -23,7 +23,7 @@ const availableOperation = makeOperationDefinition(
   {
     name: 'appointment-available',
     code: 'available',
-    parameter: [param('out', 'return', 'Bundle', 1, '1')],
+    parameter: [param('in', 'service', 'Reference', 0, '1'), param('out', 'return', 'Bundle', 1, '1')],
   }
 );
 
@@ -35,6 +35,7 @@ const bookOperation = makeOperationDefinition(
     parameter: [
       param('in', 'slot', 'Reference', 1, '1'),
       param('in', 'description', 'string', 0, '1'),
+      param('in', 'service', 'Reference', 0, '1'),
       param('out', 'return', 'Appointment', 1, '1'),
     ],
   }
@@ -68,6 +69,11 @@ const rescheduleOperation = makeOperationDefinition(
 interface BookParameters {
   slot: Reference;
   description?: string;
+  service?: Reference;
+}
+
+interface AvailabilityParameters {
+  service?: Reference;
 }
 
 interface CancelParameters {
@@ -80,9 +86,11 @@ interface RescheduleParameters {
 }
 
 /** Returns a bounded list of public availability and minimal provider identity for Patient booking. */
-export async function appointmentAvailableHandler(_req: FhirRequest): Promise<FhirResponse> {
+export async function appointmentAvailableHandler(req: FhirRequest): Promise<FhirResponse> {
   const ctx = getAuthenticatedContext();
   const patientId = getPatientId();
+  const params = parseInputParameters<AvailabilityParameters>(availableOperation, req);
+  const selectedServiceId = getHealthcareServiceId(params.service);
   const now = new Date();
   const horizon = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
   const search = parseSearchRequest<Slot>(
@@ -96,6 +104,58 @@ export async function appointmentAvailableHandler(_req: FhirRequest): Promise<Fh
   const practitioners = new Map<string, Practitioner>();
   const entries: NonNullable<Bundle['entry']> = [];
   const included = new Set<string>();
+  const roleByPractitioner = new Map<string, PractitionerRole[]>();
+  const serviceById = new Map<string, HealthcareService>();
+  const publicServiceIds = new Set<string>();
+  const roles: PractitionerRole[] = [];
+  await ctx.systemRepo.processAllResources<PractitionerRole>(
+    { resourceType: 'PractitionerRole', active: 'true' },
+    async (role) => { roles.push(role); }
+  );
+  for (const role of roles) {
+    const practitionerId = /^Practitioner\/([^/]+)$/.exec(role.practitioner?.reference ?? '')?.[1];
+    if (!practitionerId || role.active === false) continue;
+    const current = roleByPractitioner.get(practitionerId) ?? [];
+    current.push(role);
+    roleByPractitioner.set(practitionerId, current);
+    for (const reference of role.healthcareService ?? []) {
+      const serviceId = getHealthcareServiceId(reference);
+      if (serviceId && !serviceById.has(serviceId)) {
+        const service = await ctx.systemRepo.readResource<HealthcareService>('HealthcareService', serviceId).catch((error) => {
+          if (isNotFound(normalizeOperationOutcome(error))) return undefined;
+          throw error;
+        });
+        if (service && service.active !== false) serviceById.set(serviceId, service);
+      }
+    }
+  }
+  for (const [serviceId, service] of serviceById) {
+    const departmentId = /^Organization\/([^/]+)$/.exec(service.providedBy?.reference ?? '')?.[1];
+    if (!departmentId) continue;
+    const department = await ctx.systemRepo.readResource<Organization>('Organization', departmentId).catch((error) => {
+      if (isNotFound(normalizeOperationOutcome(error))) return undefined;
+      throw error;
+    });
+    if (!department || department.active === false) continue;
+    const assignedRoles = roles.filter((role) =>
+      role.organization?.reference === service.providedBy?.reference &&
+      role.healthcareService?.some((reference) => getHealthcareServiceId(reference) === serviceId)
+    );
+    let hasActiveProvider = false;
+    for (const role of assignedRoles) {
+      const practitionerId = /^Practitioner\/([^/]+)$/.exec(role.practitioner?.reference ?? '')?.[1];
+      if (!practitionerId) continue;
+      const practitioner = await ctx.systemRepo.readResource<Practitioner>('Practitioner', practitionerId).catch((error) => {
+        if (isNotFound(normalizeOperationOutcome(error))) return undefined;
+        throw error;
+      });
+      if (practitioner && practitioner.active !== false) hasActiveProvider = true;
+    }
+    if (hasActiveProvider) {
+      publicServiceIds.add(serviceId);
+      entries.push({ resource: toPublicHealthcareService(service) });
+    }
+  }
 
   for (const slot of slots) {
     if (!slot.id || !isFutureInterval(slot)) continue;
@@ -126,6 +186,13 @@ export async function appointmentAvailableHandler(_req: FhirRequest): Promise<Fh
       practitioners.set(practitionerId, practitioner);
     }
     if (practitioner.active === false) continue;
+    const serviceRoles = roleByPractitioner.get(practitionerId) ?? [];
+    const assignedServiceIds = new Set(
+      serviceRoles.flatMap((role) => (role.healthcareService ?? [])
+        .map(getHealthcareServiceId)
+        .filter((id): id is string => id !== undefined && publicServiceIds.has(id) && serviceById.get(id)?.providedBy?.reference === role.organization?.reference))
+    );
+    if (selectedServiceId && (!publicServiceIds.has(selectedServiceId) || !assignedServiceIds.has(selectedServiceId))) continue;
 
     entries.push({
       resource: {
@@ -181,6 +248,8 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
   const slotId = /^Slot\/([^/]+)$/.exec(params.slot.reference ?? '')?.[1];
   if (!slotId) return [badRequest('A Slot reference is required.')];
   const description = params.description?.trim();
+  const serviceId = getHealthcareServiceId(params.service);
+  if (params.service && !serviceId) return [badRequest('A HealthcareService reference is required.')];
   if (description && description.length > 200) return [badRequest('Appointment description must be 200 characters or fewer.')];
 
   const appointment = await ctx.systemRepo.ensureInTransaction(
@@ -202,14 +271,25 @@ export async function appointmentBookHandler(req: FhirRequest): Promise<FhirResp
       const practitionerId = practitionerRefs[0].slice('Practitioner/'.length);
       const practitioner = await txRepo.readResource<Practitioner>('Practitioner', practitionerId);
       if (practitioner.active === false) throw new OperationOutcomeError(conflict('The Practitioner is not active.'));
+      let healthcareService: HealthcareService | undefined;
+      if (serviceId && !(await isAssignedToService(txRepo, practitionerId, serviceId))) {
+        throw new OperationOutcomeError(conflict('The Practitioner is not assigned to the selected HealthcareService.'));
+      }
+      if (serviceId) healthcareService = await txRepo.readResource<HealthcareService>('HealthcareService', serviceId);
       if (await findActiveAppointmentForSlot(txRepo, slotId)) {
         throw new OperationOutcomeError(conflict('An active Appointment already references this Slot.'));
       }
 
+      const serviceType = healthcareService?.type?.length
+        ? healthcareService.type
+        : healthcareService
+          ? [{ text: healthcareService.name }]
+          : undefined;
       const newAppointment: Appointment = {
         resourceType: 'Appointment',
         status: 'booked',
         description: description || undefined,
+        serviceType,
         start: slot.start,
         end: slot.end,
         slot: [{ reference: `Slot/${slotId}` }],
@@ -390,4 +470,42 @@ function toPublicPractitioner(practitioner: Practitioner): Practitioner {
     active: practitioner.active,
     name: practitioner.name,
   };
+}
+
+function getHealthcareServiceId(reference?: Reference): string | undefined {
+  return /^HealthcareService\/([^/]+)$/.exec(reference?.reference ?? '')?.[1];
+}
+
+function toPublicHealthcareService(service: HealthcareService): HealthcareService {
+  return {
+    resourceType: 'HealthcareService',
+    id: service.id,
+    active: true,
+    name: service.name,
+    type: service.type,
+    specialty: service.specialty,
+  };
+}
+
+async function isAssignedToService(repo: SystemRepository, practitionerId: string, serviceId: string): Promise<boolean> {
+  const service = await repo.readResource<HealthcareService>('HealthcareService', serviceId);
+  if (service.active === false) return false;
+  const departmentId = /^Organization\/([^/]+)$/.exec(service.providedBy?.reference ?? '')?.[1];
+  if (!departmentId) return false;
+  const department = await repo.readResource<Organization>('Organization', departmentId);
+  if (department.active === false) return false;
+  let assigned = false;
+  await repo.processAllResources<PractitionerRole>(
+    { resourceType: 'PractitionerRole', practitioner: `Practitioner/${practitionerId}`, active: 'true' },
+    async (role) => {
+      if (
+        role.active !== false &&
+        role.organization?.reference === service.providedBy?.reference &&
+        role.healthcareService?.some((reference) => getHealthcareServiceId(reference) === serviceId)
+      ) {
+        assigned = true;
+      }
+    }
+  );
+  return assigned;
 }

@@ -10,7 +10,7 @@ Demo: `docker compose up --build -d --wait --wait-timeout 600` chạy toàn bộ
 
 Admin: project-admin Practitioner. Doctor: Practitioner với policy mặc định Medplum. Patient: compartment cá nhân theo policy mặc định. Membership/profile do backend xác thực, không lấy quyền từ query string hoặc localStorage tự đặt. Ba vai trò dùng chung app và dashboard có nội dung theo quyền.
 
-Admin quản lý membership tại `/users`: tìm theo tên/email, cấp/hạ vai trò Admin cho Practitioner và khóa/mở thành viên. Không thể tự khóa hoặc tự đổi vai trò; backend tuần tự hóa cập nhật membership và luôn giữ ít nhất một Admin đang hoạt động trong project. Danh mục Khoa/Dịch vụ dùng PractitionerRole để gán hoặc ngừng phân công bác sĩ theo HealthcareService; Practitioner chỉ đọc các liên kết này.
+Admin quản lý membership tại `/users`: tìm theo tên/email, cấp/hạ vai trò Admin cho Practitioner và khóa/mở thành viên. Không thể tự khóa hoặc tự đổi vai trò; backend tuần tự hóa cập nhật membership và luôn giữ ít nhất một Admin đang hoạt động trong project. Danh mục Khoa/Dịch vụ dùng PractitionerRole để gán hoặc ngừng phân công bác sĩ theo HealthcareService; Practitioner chỉ đọc các liên kết này. Patient có thể lọc lịch trống theo dịch vụ; backend chỉ trả dịch vụ đang hoạt động có Practitioner được phân công, kiểm tra lại liên kết khi đặt lịch và lưu loại dịch vụ vào Appointment.
 
 ## Giới hạn
 

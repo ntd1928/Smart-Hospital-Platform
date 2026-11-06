@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Appointment, Bundle, Parameters, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, HealthcareService, Parameters, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
 import { SignInForm, useMedplum, useMedplumProfile } from '@medplum/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -304,6 +304,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const [patientServices, setPatientServices] = useState<HealthcareService[]>([]);
+  const [selectedPatientService, setSelectedPatientService] = useState('');
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [error, setError] = useState<unknown>();
@@ -344,7 +346,12 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         })
       );
     } else {
-      requests.push(client.post('fhir/R4/Appointment/$available', { resourceType: 'Parameters' }));
+      requests.push(client.post('fhir/R4/Appointment/$available', {
+        resourceType: 'Parameters',
+        parameter: selectedPatientService
+          ? [{ name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } }]
+          : [],
+      }));
     }
     Promise.all(requests)
       .then(([appointmentResults, patientResults, practitionerResults, scheduleResults, slotResults]) => {
@@ -361,6 +368,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           setSlots(resources.filter((resource): resource is Slot => resource.resourceType === 'Slot'));
           setSchedules(resources.filter((resource): resource is Schedule => resource.resourceType === 'Schedule'));
           setPractitioners(resources.filter((resource): resource is Practitioner => resource.resourceType === 'Practitioner'));
+          setPatientServices(resources.filter((resource): resource is HealthcareService => resource.resourceType === 'HealthcareService'));
         }
       })
       .catch((e) => {
@@ -369,7 +377,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     return () => {
       live = false;
     };
-  }, [client, staff, refresh]);
+  }, [client, staff, refresh, selectedPatientService]);
 
   async function createAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -541,6 +549,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       const parameter: NonNullable<Parameters['parameter']> = [
         { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
       ];
+      if (selectedPatientService) {
+        parameter.push({ name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } });
+      }
       const description = String(data.get('patientAppointmentDescription') ?? '').trim();
       if (description) parameter.push({ name: 'description', valueString: description });
       await client.post('fhir/R4/Appointment/$book', {
@@ -913,6 +924,16 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           <p className="muted">Chọn một khung giờ còn trống trong 90 ngày tới. Bác sĩ và thời gian được xác nhận lại khi đặt.</p>
           <div className="form-grid">
             <label>
+              Dịch vụ khám
+              <select value={selectedPatientService} onChange={(event) => {
+                setSlots([]);
+                setSelectedPatientService(event.target.value);
+              }}>
+                <option value="">Tất cả dịch vụ</option>
+                {patientServices.map((service) => <option key={service.id} value={service.id}>{service.name ?? service.id}</option>)}
+              </select>
+            </label>
+            <label>
               Khung giờ trống
               <select name="patientSlot" required defaultValue="">
                 <option value="" disabled>Chọn khung giờ</option>
@@ -930,7 +951,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
               Nội dung
               <input name="patientAppointmentDescription" maxLength={200} placeholder="Ví dụ: Tái khám" />
             </label>
-            {availableSlots.length === 0 && <p className="empty full-width">Chưa có khung giờ trống trong 90 ngày tới.</p>}
+            {availableSlots.length === 0 && (
+              <p className="empty full-width">
+                {selectedPatientService
+                  ? 'Dịch vụ này chưa có khung giờ trống trong 90 ngày tới.'
+                  : 'Chưa có khung giờ trống trong 90 ngày tới.'}
+              </p>
+            )}
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={busy || availableSlots.length === 0}>
@@ -1169,7 +1196,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                             : (patientRef ?? '—')}
                       </td>
                       <td>{practitioner ? personName(practitioner) : practitionerRef ? 'Bác sĩ' : '—'}</td>
-                      <td>{appointment.description || '—'}</td>
+                      <td>
+                        {[appointment.serviceType?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', '), appointment.description]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </td>
                       <td>
                         <span className="pill">{appointment.status}</span>
                       </td>
