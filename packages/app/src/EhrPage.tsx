@@ -501,10 +501,41 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function reviewAllergyVerification(allergy: AllergyIntolerance, status: 'confirmed' | 'refuted') {
+    if (!allergy.id || allergy.verificationStatus?.coding?.[0]?.code !== 'unconfirmed') return;
+    const time = new Date().toISOString();
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<AllergyIntolerance>({
+        ...allergy,
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: status }] },
+        clinicalStatus: status === 'refuted'
+          ? { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'inactive' }] }
+          : allergy.clinicalStatus,
+        note: [...(allergy.note ?? []), {
+          time,
+          text: status === 'confirmed' ? 'Dị ứng được staff xác nhận sau review.' : 'Dị ứng được staff xác định là không đúng sau review.',
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(status === 'confirmed' ? 'Đã xác nhận dị ứng.' : 'Đã bác bỏ bản ghi dị ứng.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
-  const activeAllergies = allergies.filter((allergy) => allergy.clinicalStatus?.coding?.[0]?.code === 'active');
+  const activeAllergies = allergies.filter((allergy) =>
+    allergy.clinicalStatus?.coding?.[0]?.code === 'active' &&
+    !['refuted', 'entered-in-error'].includes(allergy.verificationStatus?.coding?.[0]?.code ?? '')
+  );
   const activeMedicationAllergies = activeAllergies.filter((allergy) => allergy.category?.includes('medication'));
   const latestObservation = observations
     .slice()
@@ -961,10 +992,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <td>{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).join('; ') || '—'}</td>
               <td>{allergy.onsetDateTime ? new Date(allergy.onsetDateTime).toLocaleDateString('vi-VN') : '—'}</td>
               <td>{allergy.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
-              {role !== 'Patient' && <td>{allergy.clinicalStatus?.coding?.[0]?.code === 'active' && <>
-                <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'resolved')}>Đã hết</button>{' '}
-                <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'inactive')}>Ngừng theo dõi</button>
-              </>}</td>}
+              {role !== 'Patient' && <td>
+                {allergy.verificationStatus?.coding?.[0]?.code === 'unconfirmed' && <>
+                  <button className="button" disabled={saving} onClick={() => void reviewAllergyVerification(allergy, 'confirmed')}>Xác nhận</button>{' '}
+                  <button className="button" disabled={saving} onClick={() => void reviewAllergyVerification(allergy, 'refuted')}>Bác bỏ</button>{' '}
+                </>}
+                {allergy.clinicalStatus?.coding?.[0]?.code === 'active' && allergy.verificationStatus?.coding?.[0]?.code !== 'refuted' && <>
+                  <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'resolved')}>Đã hết</button>{' '}
+                  <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'inactive')}>Ngừng theo dõi</button>
+                </>}
+              </td>}
             </tr>
           ))}</tbody>
         </table></div> : <p className="empty">Chưa có dị ứng trong phạm vi truy cập.</p>}
