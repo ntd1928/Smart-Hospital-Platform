@@ -4,6 +4,11 @@ import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
 import { Router } from 'express';
 import { getAuthenticatedContext } from '../context';
 import { authenticateRequest } from '../oauth/middleware';
+import {
+  appointmentAvailableHandler,
+  appointmentBookHandler,
+  appointmentCancelHandler,
+} from './operations/appointments';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
@@ -58,6 +63,9 @@ fhirRouter.get('/metadata', (_req, res) =>
 fhirRouter.use(authenticateRequest);
 const router = new FhirRouter({ introspectionEnabled: true });
 router.add('POST', '/Project/$init', projectInitHandler);
+router.add('POST', '/Appointment/$available', appointmentAvailableHandler);
+router.add('POST', '/Appointment/$book', appointmentBookHandler);
+router.add('POST', '/Appointment/$cancel', appointmentCancelHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

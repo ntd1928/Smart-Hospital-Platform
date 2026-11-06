@@ -224,7 +224,7 @@ async function createPatientCompartmentAccessPolicy(
     resource: [
       { resourceType: 'Patient', criteria: 'Patient?_id=%patient.id' },
       { resourceType: 'AllergyIntolerance', criteria: 'AllergyIntolerance?_compartment=%patient' },
-      { resourceType: 'Appointment', criteria: 'Appointment?_compartment=%patient', interaction: ['read', 'search', 'update'] },
+      { resourceType: 'Appointment', criteria: 'Appointment?_compartment=%patient', interaction: ['read', 'search'] },
       { resourceType: 'CarePlan', criteria: 'CarePlan?_compartment=%patient' },
       { resourceType: 'CareTeam', criteria: 'CareTeam?_compartment=%patient' },
       { resourceType: 'Communication', criteria: 'Communication?sender=%patient' },

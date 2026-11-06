@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Appointment, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
+import type { Appointment, Bundle, Parameters, Patient, Practitioner, ProjectMembership, ResourceType, Schedule, Slot, User } from '@medplum/fhirtypes';
 import { SignInForm, useMedplum, useMedplumProfile } from '@medplum/react';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -340,6 +340,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           _sort: 'start',
         })
       );
+    } else {
+      requests.push(client.post('fhir/R4/Appointment/$available', { resourceType: 'Parameters' }));
     }
     Promise.all(requests)
       .then(([appointmentResults, patientResults, practitionerResults, scheduleResults, slotResults]) => {
@@ -350,6 +352,12 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           setPractitioners(practitionerResults as Practitioner[]);
           setSchedules(scheduleResults as Schedule[]);
           setSlots(slotResults as Slot[]);
+        } else {
+          const availability = patientResults as Bundle | undefined;
+          const resources = availability?.entry?.flatMap((entry) => (entry.resource ? [entry.resource] : [])) ?? [];
+          setSlots(resources.filter((resource): resource is Slot => resource.resourceType === 'Slot'));
+          setSchedules(resources.filter((resource): resource is Schedule => resource.resourceType === 'Schedule'));
+          setPractitioners(resources.filter((resource): resource is Practitioner => resource.resourceType === 'Practitioner'));
         }
       })
       .catch((e) => {
@@ -442,6 +450,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setError(undefined);
     setMessage('');
     try {
+      if (!staff) {
+        await client.post('fhir/R4/Appointment/$cancel', {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } }],
+        });
+        setMessage('Đã hủy lịch hẹn và giải phóng khung giờ.');
+        setRefresh((value) => value + 1);
+        return;
+      }
       const entries: Array<Record<string, unknown>> = [
         {
           resource: { ...appointment, status: 'cancelled' },
@@ -471,6 +488,39 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
+    }
+  }
+
+  async function bookOwnAppointment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const slotId = String(data.get('patientSlot') ?? '');
+    if (!slotId) {
+      setError(new Error('Chọn một khung giờ còn trống.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'slot', valueReference: { reference: `Slot/${slotId}` } },
+      ];
+      const description = String(data.get('patientAppointmentDescription') ?? '').trim();
+      if (description) parameter.push({ name: 'description', valueString: description });
+      await client.post('fhir/R4/Appointment/$book', {
+        resourceType: 'Parameters',
+        parameter,
+      });
+      setMessage('Đã đặt lịch hẹn. Khung giờ được giữ trong cùng một giao dịch.');
+      form.reset();
+      setRefresh((value) => value + 1);
+    } catch (e) {
+      setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -822,6 +872,38 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         <div className="notice" role="status">
           {message}
         </div>
+      )}
+      {!staff && (
+        <form className="panel editor" onSubmit={bookOwnAppointment}>
+          <h2>Đặt lịch khám</h2>
+          <p className="muted">Chọn một khung giờ còn trống trong 90 ngày tới. Bác sĩ và thời gian được xác nhận lại khi đặt.</p>
+          <div className="form-grid">
+            <label>
+              Khung giờ trống
+              <select name="patientSlot" required defaultValue="">
+                <option value="" disabled>Chọn khung giờ</option>
+                {availableSlots.map(({ slot, practitionerReference }) => {
+                  const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerReference);
+                  return (
+                    <option key={slot.id} value={slot.id}>
+                      {new Date(slot.start!).toLocaleString('vi-VN')} – {new Date(slot.end!).toLocaleTimeString('vi-VN')} · {practitioner ? personName(practitioner) : 'Bác sĩ'}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label>
+              Nội dung
+              <input name="patientAppointmentDescription" maxLength={200} placeholder="Ví dụ: Tái khám" />
+            </label>
+            {availableSlots.length === 0 && <p className="empty full-width">Chưa có khung giờ trống trong 90 ngày tới.</p>}
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={busy || availableSlots.length === 0}>
+              {busy ? 'Đang đặt…' : 'Đặt lịch'}
+            </button>
+          </div>
+        </form>
       )}
       {staff && (
         <form className="panel editor" onSubmit={createAppointment}>

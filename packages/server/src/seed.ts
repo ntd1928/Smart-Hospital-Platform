@@ -46,7 +46,7 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     await createSuperAdmin(globalShardRepo, config);
   }
 
-  await migratePatientAppointmentUpdatePolicy(globalShardRepo);
+  await reconcileDefaultPatientAppointmentPolicy(globalShardRepo);
 
   // Shards are seeded serially. Potential optimizations if seeding new shards becomes slow:
   // - Read and parse the base definition bundles once and share them across shards; today each shard
@@ -61,12 +61,12 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
     if (!(await shardSystemRepo.searchOne({ resourceType: 'StructureDefinition' }))) {
       await seedBaseDefinitions(shardSystemRepo);
     }
-    await migratePatientAppointmentUpdatePolicy(shardSystemRepo);
+    await reconcileDefaultPatientAppointmentPolicy(shardSystemRepo);
   }
 }
 
-/** Apply the patient self-cancellation permission to existing default policies. */
-async function migratePatientAppointmentUpdatePolicy(systemRepo: SystemRepository): Promise<void> {
+/** Keep existing default Patient policies read-only for Appointment direct interactions. */
+async function reconcileDefaultPatientAppointmentPolicy(systemRepo: SystemRepository): Promise<void> {
   await systemRepo.processAllResources<Project>({ resourceType: 'Project' }, async (project) => {
     const patientPolicyRef = project.defaultAccessPolicies?.find(
       (policy) => policy.profileType === 'Patient'
@@ -89,19 +89,21 @@ async function migratePatientAppointmentUpdatePolicy(systemRepo: SystemRepositor
     if (!appointmentRule) {
       return;
     }
-    const interaction = new Set(appointmentRule.interaction ?? []);
-    const required: NonNullable<AccessPolicyResource['interaction']> = ['read', 'search', 'update'];
-    if (required.every((value) => interaction.has(value))) {
+    const allowed: NonNullable<AccessPolicyResource['interaction']> = ['read', 'search'];
+    if (
+      appointmentRule.interaction?.length === allowed.length &&
+      allowed.every((value) => appointmentRule.interaction?.includes(value))
+    ) {
       return;
     }
 
     await systemRepo.updateResource<AccessPolicy>({
       ...policy,
       resource: policy.resource?.map((rule) =>
-        rule === appointmentRule ? { ...rule, interaction: [...new Set([...interaction, ...required])] } : rule
+        rule === appointmentRule ? { ...rule, interaction: allowed } : rule
       ),
     });
-    globalLogger.info('Updated default Patient Appointment policy', { projectId: project.id });
+    globalLogger.info('Reconciled default Patient Appointment policy', { projectId: project.id });
   });
 }
 
