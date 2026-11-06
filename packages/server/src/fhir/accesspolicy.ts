@@ -6,6 +6,7 @@ import {
   createReference,
   EMPTY,
   getReferenceString,
+  getResourceTypes,
   isNotFound,
   isResource,
   isString,
@@ -145,6 +146,11 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
 
   let accessPolicy = await buildAccessPolicy(membership);
 
+  const profileReference = getReferenceString(membership.profile);
+  if (!membership.admin && profileReference?.startsWith('Practitioner/')) {
+    accessPolicy = restrictPractitionerPatientAccess(accessPolicy, profileReference);
+  }
+
   if (login.scope) {
     // If the login specifies SMART scopes,
     // then set the access policy to use those scopes
@@ -157,6 +163,60 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   accessPolicy = applyProjectAdminAccessPolicy(project, membership, accessPolicy);
 
   return accessPolicy;
+}
+
+const practitionerPatientCriteria: Record<string, string[]> = {
+  Patient: ['general-practitioner'],
+  AllergyIntolerance: ['patient:Patient.general-practitioner'],
+  Appointment: ['actor:Patient.general-practitioner'],
+  Condition: ['patient:Patient.general-practitioner'],
+  Encounter: ['patient:Patient.general-practitioner'],
+  MedicationAdministration: ['patient:Patient.general-practitioner'],
+  MedicationRequest: ['patient:Patient.general-practitioner'],
+  MedicationStatement: ['patient:Patient.general-practitioner'],
+  Observation: ['patient:Patient.general-practitioner'],
+};
+
+/**
+ * Applies assignment-based restrictions to Practitioner repositories. Access policies are additive,
+ * so wildcard grants must be expanded before criteria are applied to patient-specific resources.
+ * @param accessPolicy - The populated access policy for the login.
+ * @param practitionerReference - The authenticated Practitioner reference.
+ * @returns An access policy restricted to assigned patient records and their clinical resources.
+ */
+function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, practitionerReference: string): PopulatedAccessPolicy {
+  const resourcePolicies: AccessPolicyResource[] = [];
+  for (const rule of accessPolicy.resource) {
+    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
+    for (const resourceType of resourceTypes) {
+      const scopedSearchParameters = practitionerPatientCriteria[resourceType];
+      const criteriaFragments = scopedSearchParameters?.map((parameter) => `${parameter}=${encodeURIComponent(practitionerReference)}`);
+      const baseCriteria = rule.criteria?.replace(/^\*\?/, `${resourceType}?`);
+      const queryIndex = baseCriteria?.indexOf('?') ?? -1;
+      const baseQuery = queryIndex >= 0 ? baseCriteria?.slice(queryIndex + 1) : undefined;
+      const compartment = rule.compartment ? resolveId(rule.compartment) : undefined;
+      const existingCriteria = [baseQuery, ...(compartment ? [`_compartment=${encodeURIComponent(compartment)}`] : [])].filter(Boolean);
+      const scopedRule: AccessPolicyResource = {
+        ...rule,
+        resourceType,
+        criteria: existingCriteria.length ? `${resourceType}?${existingCriteria.join('&')}` : undefined,
+        compartment: undefined,
+      };
+      if (scopedSearchParameters) {
+        scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
+        if (resourceType === 'Patient' && !scopedRule.readonly) {
+          const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
+          scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'delete');
+        }
+        for (const criteria of criteriaFragments ?? []) {
+          resourcePolicies.push({ ...scopedRule, criteria: `${resourceType}?${[...existingCriteria, criteria].join('&')}` });
+        }
+      } else {
+        resourcePolicies.push(scopedRule);
+      }
+    }
+  }
+  return { ...accessPolicy, resource: resourcePolicies };
 }
 
 /**

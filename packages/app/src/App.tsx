@@ -154,13 +154,13 @@ export function App() {
             <Route path="/doctors" element={role !== 'Patient' ? <PeopleList type="Practitioner" /> : <Forbidden />} />
             <Route
               path="/patients/new"
-              element={role !== 'Patient' ? <PersonEditor type="Patient" /> : <Forbidden />}
+              element={role === 'Admin' ? <PersonEditor type="Patient" /> : <Forbidden />}
             />
             <Route
               path="/doctors/new"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
             />
-            <Route path="/patients/:id/edit" element={<PersonEditor type="Patient" />} />
+            <Route path="/patients/:id/edit" element={role !== 'Patient' ? <PersonEditor type="Patient" /> : <Forbidden />} />
             <Route
               path="/doctors/:id/edit"
               element={role === 'Admin' ? <PersonEditor type="Practitioner" /> : <Forbidden />}
@@ -1493,7 +1493,7 @@ function PeopleList({ type }: { type: 'Patient' | 'Practitioner' }) {
         title={type === 'Patient' ? 'Quản lý bệnh nhân' : 'Danh sách bác sĩ'}
         description="Tìm kiếm và quản lý thông tin hồ sơ theo chuẩn FHIR."
         action={
-          (type === 'Patient' || admin) && (
+          admin && (
             <Link className="button primary" to={`${base}/new`}>
               + Thêm {type === 'Patient' ? 'bệnh nhân' : 'bác sĩ'}
             </Link>
@@ -1584,7 +1584,7 @@ function PersonDetails({ type }: { type: 'Patient' | 'Practitioner' }) {
       setError(e);
     }
   }
-  const canEdit = type === 'Patient' || role === 'Admin';
+  const canEdit = role === 'Admin' || (type === 'Patient' && role === 'Doctor');
   return (
     <>
       <PageTitle
@@ -1638,12 +1638,19 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
   const [person, setPerson] = useState<Patient | Practitioner>();
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const [practitioners, setPractitioners] = useState<Practitioner[]>([]);
+  const isAdmin = client.getProjectMembership()?.admin === true;
   const base = type === 'Patient' ? '/patients' : '/doctors';
   useEffect(() => {
     setPerson(undefined);
     if (id) client.readResource(type, id).then(setPerson).catch(setError);
     else setPerson({ resourceType: type, active: true });
   }, [client, id, type]);
+  useEffect(() => {
+    if (type === 'Patient' && isAdmin) {
+      client.searchResources('Practitioner', { _count: '100', _sort: 'name' }).then(setPractitioners).catch(setError);
+    }
+  }, [client, type, isAdmin]);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!person) return;
@@ -1661,6 +1668,12 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
       ].filter((t) => t.value),
       address: [{ text: String(data.get('address')) }],
       active: data.get('active') === 'on',
+      ...(type === 'Patient' && isAdmin ? {
+        generalPractitioner: [
+          ...(person.resourceType === 'Patient' ? person.generalPractitioner?.filter((reference) => !reference.reference?.startsWith('Practitioner/')) ?? [] : []),
+          ...(data.get('generalPractitioner') ? [{ reference: `Practitioner/${String(data.get('generalPractitioner'))}` }] : []),
+        ],
+      } : {}),
     } as Patient | Practitioner;
     try {
       const result = resource.id ? await client.updateResource(resource) : await client.createResource(resource);
@@ -1726,6 +1739,19 @@ function PersonEditor({ type }: { type: 'Patient' | 'Practitioner' }) {
                 defaultValue={person.telecom?.find((t) => t.system === 'email')?.value}
               />
             </label>
+            {type === 'Patient' && isAdmin && <label>
+              Bác sĩ phụ trách
+              <select
+                name="generalPractitioner"
+                defaultValue={person.generalPractitioner?.find((reference) => reference.reference?.startsWith('Practitioner/'))?.reference?.slice('Practitioner/'.length) ?? ''}
+              >
+                <option value="">Chưa phân công</option>
+                {practitioners.map((practitioner) => (
+                  <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}{practitioner.active === false ? ' · Ngừng hoạt động' : ''}</option>
+                ))}
+              </select>
+              <small className="muted">Patient chưa được phân công chỉ hiển thị với Admin và chính bệnh nhân.</small>
+            </label>}
             <label className="full-width">
               Địa chỉ
               <input name="address" maxLength={300} defaultValue={person.address?.[0]?.text} />
