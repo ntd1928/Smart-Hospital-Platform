@@ -474,6 +474,40 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
+  async function recordAppointmentOutcome(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!staff || !appointment.id || !appointment.start || new Date(appointment.start) > new Date()) return;
+    if (!['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(appointment.status ?? '')) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const status = String(data.get('appointmentOutcome'));
+    const reason = String(data.get('appointmentOutcomeReason') ?? '').trim();
+    if ((status !== 'fulfilled' && status !== 'noshow') || !reason) {
+      setError(new Error('Chọn kết quả hợp lệ và nhập lý do ghi nhận.'));
+      return;
+    }
+    if (status === 'noshow' && appointment.end && new Date(appointment.end) > new Date()) {
+      setError(new Error('Chỉ ghi nhận không đến sau khi khung giờ hẹn đã kết thúc.'));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const timestamp = new Date().toISOString();
+      const actor = profile.id ? `Practitioner/${profile.id}` : 'Nhân viên';
+      const comment = [appointment.comment, `[${timestamp} · ${actor}] ${status}: ${reason}`].filter(Boolean).join('\n');
+      const updated = await client.updateResource<Appointment>({ ...appointment, status, comment });
+      setAppointments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(status === 'fulfilled' ? 'Đã ghi nhận lịch hẹn hoàn tất.' : 'Đã ghi nhận bệnh nhân không đến.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createAvailability(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -985,6 +1019,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                   <th>Bác sĩ</th>
                   <th>Nội dung</th>
                   <th>Trạng thái</th>
+                  <th>Ghi chú</th>
                   {staff && <th />}
                 </tr>
               </thead>
@@ -1002,6 +1037,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                     ['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
                     !!appointment.start &&
                     new Date(appointment.start) > new Date();
+                  const canRecordOutcome =
+                    ['proposed', 'pending', 'booked', 'arrived', 'checked-in', 'waitlist'].includes(appointment.status ?? '') &&
+                    !!appointment.start && new Date(appointment.start) <= new Date();
                   return (
                     <tr key={appointment.id} data-resource-id={appointment.id}>
                       <td>
@@ -1019,15 +1057,27 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                       <td>
                         <span className="pill">{appointment.status}</span>
                       </td>
-                      {staff && (
-                        <td>
+                      <td>{appointment.comment || '—'}</td>
+                      {staff && <td>
                           {canCancel && (
                             <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
                               Hủy
                             </button>
                           )}
-                        </td>
-                      )}
+                          {canRecordOutcome && <details>
+                            <summary>Ghi nhận kết quả</summary>
+                            <form className="editor" onSubmit={(event) => void recordAppointmentOutcome(appointment, event)}>
+                              <label>Kết quả
+                                <select name="appointmentOutcome" defaultValue="fulfilled">
+                                  <option value="fulfilled">Đã hoàn tất</option>
+                                  <option value="noshow" disabled={!!appointment.end && new Date(appointment.end) > new Date()}>Bệnh nhân không đến</option>
+                                </select>
+                              </label>
+                              <label>Lý do/ghi chú<textarea name="appointmentOutcomeReason" maxLength={500} rows={2} required /></label>
+                              <button className="button" disabled={busy}>Lưu kết quả</button>
+                            </form>
+                          </details>}
+                        </td>}
                     </tr>
                   );
                 })}
