@@ -572,6 +572,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           actor: [{ reference: practitionerReference }],
         });
       }
+      const seriesId = crypto.randomUUID();
       await client.post('fhir/R4', {
         resourceType: 'Bundle',
         type: 'transaction',
@@ -579,6 +580,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           resource: {
             resourceType: 'Slot',
             schedule: { reference: `Schedule/${schedule.id}` },
+            identifier: [{ system: 'urn:smart-hospital:recurring-slot-series', value: seriesId }],
             status: 'free',
             start: start.toISOString(),
             end: end.toISOString(),
