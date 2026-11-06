@@ -139,6 +139,34 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function addEncounterNote(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!encounter.id || encounter.status !== 'in-progress') return;
+    const form = event.currentTarget;
+    const text = String(new FormData(form).get('encounterNote')).trim();
+    if (!text) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Encounter>({
+        ...encounter,
+        note: [...(encounter.note ?? []), {
+          time: new Date().toISOString(),
+          text,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã bổ sung ghi chú diễn biến.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createCondition(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -389,6 +417,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   return appointment?.start ? new Date(appointment.start).toLocaleString('vi-VN') : reference.display ?? reference.reference;
                 }).join(', ') || '—'}</td>
                 {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <>
+                  <details>
+                    <summary>Bổ sung ghi chú</summary>
+                    <form className="editor" onSubmit={(event) => void addEncounterNote(encounter, event)}>
+                      <textarea name="encounterNote" maxLength={4000} rows={3} required />
+                      <button className="button" disabled={saving}>Lưu ghi chú</button>
+                    </form>
+                  </details>
                   <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'finished')}>Kết thúc</button>{' '}
                   <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'cancelled')}>Hủy</button>
                 </>}</td>}
