@@ -9,6 +9,7 @@ import {
   expandRecurringSlotIntervals,
   findAppointmentConflict,
   findAvailableSlots,
+  RECURRING_SLOT_SERIES_SYSTEM,
   removeIntervalsConflictingWithSlots,
   removeOverlappingIntervals,
 } from './appointment-scheduling';
@@ -580,7 +581,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           resource: {
             resourceType: 'Slot',
             schedule: { reference: `Schedule/${schedule.id}` },
-            identifier: [{ system: 'urn:smart-hospital:recurring-slot-series', value: seriesId }],
+            identifier: [{ system: RECURRING_SLOT_SERIES_SYSTEM, value: seriesId }],
             status: 'free',
             start: start.toISOString(),
             end: end.toISOString(),

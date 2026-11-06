@@ -1,6 +1,7 @@
 import type { Appointment, Schedule, Slot } from '@medplum/fhirtypes';
 
 const nonBlockingStatuses = new Set(['cancelled', 'entered-in-error', 'fulfilled', 'noshow']);
+export const RECURRING_SLOT_SERIES_SYSTEM = 'urn:smart-hospital:recurring-slot-series';
 
 export interface AvailableSlot {
   slot: Slot;
