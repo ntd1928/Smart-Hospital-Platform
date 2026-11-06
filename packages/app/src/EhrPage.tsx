@@ -715,6 +715,36 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function markMedicationRequestEnteredInError(request: MedicationRequest, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!request.id || request.status === 'entered-in-error') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('medicationEntryErrorReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<MedicationRequest>({
+        ...request,
+        status: 'entered-in-error',
+        statusReason: { text: reason },
+        note: [...(request.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Yêu cầu thuốc được đánh dấu nhập nhầm; dữ liệu kê đơn được giữ để truy vết. Lý do: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã đánh dấu yêu cầu thuốc nhập nhầm và lưu lý do.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createAllergyIntolerance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1469,20 +1499,29 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{request.statusReason?.text ?? '—'}</td>
                 <td>{request.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : request.encounter?.display ?? request.encounter?.reference ?? '—'}</td>
-                {role !== 'Patient' && <td>{request.status === 'active' && <details>
-                  <summary>Cập nhật trạng thái</summary>
-                  <form className="editor" onSubmit={(event) => void updateMedicationRequestStatus(request, event)}>
-                    <label>Trạng thái mới
-                      <select name="medicationNextStatus" defaultValue="stopped">
-                        <option value="stopped">Đã ngừng</option>
-                        <option value="cancelled">Đã hủy trước khi dùng</option>
-                        <option value="completed">Đã hoàn tất</option>
-                      </select>
-                    </label>
-                    <label>Lý do<textarea name="medicationStatusReason" maxLength={500} rows={3} required /></label>
-                    <button className="button" disabled={saving}>Lưu trạng thái</button>
-                  </form>
-                </details>}</td>}
+                {role !== 'Patient' && <td>
+                  {request.status === 'active' && <details>
+                    <summary>Cập nhật trạng thái</summary>
+                    <form className="editor" onSubmit={(event) => void updateMedicationRequestStatus(request, event)}>
+                      <label>Trạng thái mới
+                        <select name="medicationNextStatus" defaultValue="stopped">
+                          <option value="stopped">Đã ngừng</option>
+                          <option value="cancelled">Đã hủy trước khi dùng</option>
+                          <option value="completed">Đã hoàn tất</option>
+                        </select>
+                      </label>
+                      <label>Lý do<textarea name="medicationStatusReason" maxLength={500} rows={3} required /></label>
+                      <button className="button" disabled={saving}>Lưu trạng thái</button>
+                    </form>
+                  </details>}
+                  {request.status !== 'entered-in-error' && <details>
+                    <summary>Đánh dấu nhập nhầm</summary>
+                    <form className="editor" onSubmit={(event) => void markMedicationRequestEnteredInError(request, event)}>
+                      <label>Lý do<textarea name="medicationEntryErrorReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                    </form>
+                  </details>}
+                </td>}
               </tr>
             );
           })}</tbody>
