@@ -15,6 +15,7 @@ export const SUPPORTED_FHIR_RESOURCES = [
   'Condition',
   'Observation',
   'MedicationRequest',
+  'AllergyIntolerance',
   'Schedule',
   'Slot',
   'Organization',

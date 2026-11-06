@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { Appointment, Condition, Encounter, MedicationRequest, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationRequest, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -22,6 +22,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
   const [medicationRequests, setMedicationRequests] = useState<MedicationRequest[]>([]);
+  const [allergies, setAllergies] = useState<AllergyIntolerance[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [error, setError] = useState<unknown>();
   const [message, setMessage] = useState('');
@@ -89,6 +90,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       for await (const page of client.searchResourcePages('MedicationRequest', { patient: patientReference, _count: '100', _sort: '-authoredon' })) results.push(...page);
       return results;
     })();
+    const allergyResultsPromise = (async () => {
+      const results: AllergyIntolerance[] = [];
+      for await (const page of client.searchResourcePages('AllergyIntolerance', { patient: patientReference, _count: '100', _sort: '-recorded-date' })) results.push(...page);
+      return results;
+    })();
     const appointmentResultsPromise = (async () => {
       const results: Appointment[] = [];
       for await (const page of client.searchResourcePages('Appointment', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
@@ -99,14 +105,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       conditionResultsPromise,
       observationResultsPromise,
       medicationRequestResultsPromise,
+      allergyResultsPromise,
       appointmentResultsPromise,
     ])
-      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, appointmentResults]) => {
+      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, allergyResults, appointmentResults]) => {
         if (!live) return;
         setEncounters(encounterResults);
         setConditions(conditionResults);
         setObservations(observationResults);
         setMedicationRequests(medicationRequestResults);
+        setAllergies(allergyResults);
         setAppointments(appointmentResults);
       })
       .catch((e) => {
@@ -382,9 +390,54 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createAllergyIntolerance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const allergen = String(data.get('allergySubstance') ?? '').trim();
+    const categoryInput = String(data.get('allergyCategory') ?? 'medication');
+    const verificationInput = String(data.get('allergyVerification') ?? 'confirmed');
+    const criticalityInput = String(data.get('allergyCriticality') ?? '');
+    const onsetDate = String(data.get('allergyOnsetDate') ?? '');
+    const reactionText = String(data.get('allergyReaction') ?? '').trim();
+    const reactionSeverity = String(data.get('allergyReactionSeverity') ?? '');
+    if (!patientId || !allergen || (onsetDate && !Number.isFinite(new Date(onsetDate).getTime()))) {
+      setError(new Error('Chọn bệnh nhân, nhập tác nhân gây dị ứng và ngày khởi phát hợp lệ.'));
+      return;
+    }
+    const category = categoryInput === 'food' || categoryInput === 'environment' || categoryInput === 'biologic' ? categoryInput : 'medication';
+    const verificationStatus = verificationInput === 'unconfirmed' ? 'unconfirmed' : 'confirmed';
+    const criticality = criticalityInput === 'low' || criticalityInput === 'high' ? criticalityInput : undefined;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const allergy = await client.createResource<AllergyIntolerance>({
+        resourceType: 'AllergyIntolerance',
+        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'active' }] },
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: verificationStatus }] },
+        category: [category],
+        criticality,
+        code: { text: allergen },
+        patient: { reference: `Patient/${patientId}` },
+        onsetDateTime: onsetDate ? new Date(`${onsetDate}T00:00:00`).toISOString() : undefined,
+        recordedDate: new Date().toISOString(),
+        reaction: reactionText ? [{ manifestation: [{ text: reactionText }], severity: reactionSeverity === 'mild' || reactionSeverity === 'moderate' || reactionSeverity === 'severe' ? reactionSeverity : undefined }] : undefined,
+      });
+      setAllergies((current) => [allergy, ...current]);
+      setMessage('Đã ghi nhận dị ứng.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
+  const activeAllergies = allergies.filter((allergy) => allergy.clinicalStatus?.coding?.[0]?.code === 'active');
   const latestObservation = observations
     .slice()
     .sort((a, b) => (b.effectiveDateTime ?? '').localeCompare(a.effectiveDateTime ?? ''))[0];
@@ -424,6 +477,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setConditions([]);
     setObservations([]);
     setMedicationRequests([]);
+    setAllergies([]);
     setAppointments([]);
     setEncounterSearch('');
     setEncounterStatusFilter('');
@@ -474,6 +528,18 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {error && <div className="notice error" role="alert">{normalizeErrorString(error)}</div>}
       {message && <div className="notice" role="status">{message}</div>}
       {loading ? <p className="muted">Đang tải hồ sơ…</p> : null}
+      {patientId && <section className="panel">
+        <h2>Dị ứng đang ghi nhận</h2>
+        {activeAllergies.length ? <ul>{activeAllergies.map((allergy) => (
+          <li key={allergy.id}>
+            <strong>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ tác nhân'}</strong>
+            {' · '}{allergy.category?.join(', ') || 'Chưa phân loại'}
+            {' · '}xác minh: {allergy.verificationStatus?.coding?.[0]?.code ?? 'unknown'}
+            {allergy.criticality ? ` · mức độ nguy cơ: ${allergy.criticality}` : ''}
+            {allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).map((text) => ` · phản ứng: ${text}`)}
+          </li>
+        ))}</ul> : <p className="empty">Chưa có dị ứng đang hoạt động được ghi nhận.</p>}
+      </section>}
       {patientId && <div className="stat-grid">
         <section className="stat-card"><span>Lần khám</span><strong>{encounters.length}</strong><small>{inProgressEncounterCount} đang diễn ra</small></section>
         <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
@@ -591,6 +657,48 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu yêu cầu thuốc'}</button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createAllergyIntolerance}>
+          <h2>Ghi nhận dị ứng</h2>
+          <div className="form-grid">
+            <label>Tác nhân<input name="allergySubstance" maxLength={200} required /></label>
+            <label>Nhóm
+              <select name="allergyCategory" defaultValue="medication">
+                <option value="medication">Thuốc</option>
+                <option value="food">Thực phẩm</option>
+                <option value="environment">Môi trường</option>
+                <option value="biologic">Sinh phẩm</option>
+              </select>
+            </label>
+            <label>Xác minh
+              <select name="allergyVerification" defaultValue="confirmed">
+                <option value="confirmed">Đã xác nhận</option>
+                <option value="unconfirmed">Chưa xác minh</option>
+              </select>
+            </label>
+            <label>Mức độ nguy cơ
+              <select name="allergyCriticality" defaultValue="">
+                <option value="">Chưa đánh giá</option>
+                <option value="low">Thấp</option>
+                <option value="high">Cao</option>
+              </select>
+            </label>
+            <label>Ngày khởi phát<input name="allergyOnsetDate" type="date" /></label>
+            <label>Phản ứng<input name="allergyReaction" maxLength={300} /></label>
+            <label>Mức độ phản ứng
+              <select name="allergyReactionSeverity" defaultValue="">
+                <option value="">Chưa đánh giá</option>
+                <option value="mild">Nhẹ</option>
+                <option value="moderate">Vừa</option>
+                <option value="severe">Nặng</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu dị ứng'}</button>
           </div>
         </form>
       )}
@@ -747,6 +855,23 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             );
           })}</tbody>
         </table></div> : <p className="empty">Chưa có đơn thuốc trong phạm vi truy cập.</p>}
+      </section>
+      <section className="panel">
+        <h2>Lịch sử dị ứng</h2>
+        {allergies.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Tác nhân</th><th>Nhóm</th><th>Trạng thái</th><th>Xác minh</th><th>Nguy cơ</th><th>Phản ứng</th><th>Khởi phát</th></tr></thead>
+          <tbody>{allergies.map((allergy) => (
+            <tr key={allergy.id}>
+              <td>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? '—'}</td>
+              <td>{allergy.category?.join(', ') ?? '—'}</td>
+              <td>{allergy.clinicalStatus?.coding?.[0]?.code ?? '—'}</td>
+              <td>{allergy.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
+              <td>{allergy.criticality ?? '—'}</td>
+              <td>{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).join('; ') || '—'}</td>
+              <td>{allergy.onsetDateTime ? new Date(allergy.onsetDateTime).toLocaleDateString('vi-VN') : '—'}</td>
+            </tr>
+          ))}</tbody>
+        </table></div> : <p className="empty">Chưa có dị ứng trong phạm vi truy cập.</p>}
       </section>
       {role !== 'Patient' && selectedPatient && <p className="muted">Bác sĩ/nhân viên: dữ liệu chỉ hiện khi FHIR API cho phép đọc bệnh nhân đã chọn.</p>}
     </>
