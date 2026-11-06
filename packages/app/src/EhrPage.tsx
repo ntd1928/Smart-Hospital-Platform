@@ -37,6 +37,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [observationCategory, setObservationCategory] = useState('');
   const [observationFrom, setObservationFrom] = useState('');
   const [observationTo, setObservationTo] = useState('');
+  const [medicationSearch, setMedicationSearch] = useState('');
+  const [medicationStatusFilter, setMedicationStatusFilter] = useState('');
+  const [medicationFrom, setMedicationFrom] = useState('');
+  const [medicationTo, setMedicationTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -569,6 +573,21 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!observationFrom || (effectiveDate && effectiveDate >= observationFrom))
       && (!observationTo || (effectiveDate && effectiveDate <= observationTo));
   });
+  const medicationQuery = medicationSearch.trim().toLocaleLowerCase();
+  const filteredMedicationRequests = medicationRequests.filter((request) => {
+    const name = request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? '';
+    const authoredDate = request.authoredOn?.slice(0, 10) ?? '';
+    const searchableText = [
+      name,
+      request.dosageInstruction?.map((instruction) => instruction.text).join(' '),
+      request.statusReason?.text,
+      request.note?.map((note) => note.text).join(' '),
+    ].join(' ').toLocaleLowerCase();
+    return (!medicationQuery || searchableText.includes(medicationQuery))
+      && (!medicationStatusFilter || request.status === medicationStatusFilter)
+      && (!medicationFrom || (authoredDate && authoredDate >= medicationFrom))
+      && (!medicationTo || (authoredDate && authoredDate <= medicationTo));
+  });
   function selectPatient(nextPatientId: string) {
     setPatientId(nextPatientId);
     setSelectedPatientRecord(patients.find((patient) => patient.id === nextPatientId));
@@ -589,6 +608,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setObservationCategory('');
     setObservationFrom('');
     setObservationTo('');
+    setMedicationSearch('');
+    setMedicationStatusFilter('');
+    setMedicationFrom('');
+    setMedicationTo('');
     setError(undefined);
     setMessage('');
     setLoading(Boolean(nextPatientId));
@@ -945,9 +968,29 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Đơn thuốc</h2>
-        {medicationRequests.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lý do ngừng</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
-          <tbody>{medicationRequests.map((request) => {
+        <div className="form-grid">
+          <label className="full-width">Tìm thuốc, cách dùng hoặc ghi chú
+            <input value={medicationSearch} onChange={(event) => setMedicationSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái
+            <select value={medicationStatusFilter} onChange={(event) => setMedicationStatusFilter(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="active">Đang hiệu lực</option>
+              <option value="on-hold">Tạm giữ</option>
+              <option value="completed">Đã hoàn tất</option>
+              <option value="stopped">Đã ngừng</option>
+              <option value="cancelled">Đã hủy</option>
+              <option value="entered-in-error">Nhập sai</option>
+              <option value="draft">Bản nháp</option>
+              <option value="unknown">Không rõ</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={medicationFrom} onChange={(event) => setMedicationFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={medicationTo} onChange={(event) => setMedicationTo(event.currentTarget.value)} /></label>
+        </div>
+        {filteredMedicationRequests.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lý do cập nhật</th><th>Ghi chú audit</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <tbody>{filteredMedicationRequests.map((request) => {
             const encounter = encounters.find((item) => request.encounter?.reference === `Encounter/${item.id}`);
             const quantity = request.dispenseRequest?.quantity;
             return (
@@ -958,6 +1001,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{quantity ? `${quantity.value ?? ''} ${quantity.unit ?? ''}` : '—'}{request.dispenseRequest?.numberOfRepeatsAllowed !== undefined ? ` · cấp thêm ${request.dispenseRequest.numberOfRepeatsAllowed} lần` : ''}</td>
                 <td>{request.status}</td>
                 <td>{request.statusReason?.text ?? '—'}</td>
+                <td>{request.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : request.encounter?.display ?? request.encounter?.reference ?? '—'}</td>
                 {role !== 'Patient' && <td>{request.status === 'active' && <details>
                   <summary>Cập nhật trạng thái</summary>
@@ -976,7 +1020,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có đơn thuốc trong phạm vi truy cập.</p>}
+        </table></div> : <p className="empty">{medicationRequests.length ? 'Không có đơn thuốc phù hợp với bộ lọc.' : 'Chưa có đơn thuốc trong phạm vi truy cập.'}</p>}
       </section>
       <section className="panel">
         <h2>Lịch sử dị ứng</h2>
