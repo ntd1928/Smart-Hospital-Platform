@@ -17,7 +17,8 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | GET /fhir/R4/Patient/:id/_history             | Lịch sử phiên bản                             |
 | /fhir/R4/Practitioner                         | CRUD/search tương tự                          |
 | /fhir/R4/Appointment                          | CRUD/search cơ bản                            |
-| /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |`r`n| /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; quyền do policy/compartment kiểm tra |
+| /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |
+| /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; quyền do policy/compartment kiểm tra |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 
 POST `/fhir/R4` nhận FHIR transaction Bundle nếu mọi entry thuộc resource type được bật trong router; các thao tác trong Bundle chạy qua repository và access policy hiện có.
@@ -36,4 +37,3 @@ const patient = await medplum.createResource({
 ```
 
 Lỗi trả FHIR OperationOutcome: thiếu/sai token 401; không đủ quyền 403 hoặc 404 để tránh lộ resource; dữ liệu sai 400; bản hiện tại đã xóa mềm 410. Search có thể trả Bundle rỗng khi không được xem bản ghi. Kiểm thử trực tiếp nằm trong tests/api.integration.ts.
-

@@ -21,7 +21,7 @@ User chứa tài khoản và password bcrypt hash. ProjectMembership nối User,
 
 Appointment.participant.actor tham chiếu Patient/Practitioner và Appointment.slot có thể tham chiếu Slot. Schedule gắn Slot với Practitioner; repository kiểm tra khoảng thời gian chồng lấn giữa Appointment, giữa Slot trên các Schedule active của cùng Practitioner và giữa Slot với Appointment active, dùng transaction lock theo Practitioner. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
 
-Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. API FHIR đã mở Encounter, Condition và Observation; app có trang hồ sơ cơ bản, staff ghi resource và Patient đọc lịch sử theo policy/compartment. Chưa có đầy đủ vòng đời lâm sàng, liên kết Encounter với Appointment đã khám hay lưu tài liệu cloud. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR.
+Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. API FHIR đã mở Encounter, Condition và Observation; app có trang hồ sơ cơ bản, staff ghi resource và Patient đọc lịch sử theo policy/compartment. Form Encounter cho phép tham chiếu Appointment đã hoàn tất; chưa có kiểm tra tính nhất quán hai resource hoặc đầy đủ vòng đời lâm sàng và lưu tài liệu cloud. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR.
 
 ## Auth và quyền
 
