@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
+import { EhrPage } from './EhrPage';
 import {
   expandRecurringSlotIntervals,
   findAppointmentConflict,
@@ -109,6 +110,7 @@ export function App() {
           )}
           {role === 'Patient' && <NavLink to={`/patients/${profile.id}`}>♡ Hồ sơ của tôi</NavLink>}
           <NavLink to="/appointments">◷ Lịch hẹn</NavLink>
+          <NavLink to="/records">▤ Bệnh án</NavLink>
           {role === 'Admin' && <NavLink to="/users">▤ Người dùng</NavLink>}
         </nav>
         <div className="sidebar-bottom">
@@ -140,6 +142,7 @@ export function App() {
               path="/appointments"
               element={<AppointmentPage role={role} profile={profile as Patient | Practitioner} />}
             />
+            <Route path="/records" element={<EhrPage role={role} profile={profile as Patient | Practitioner} />} />
             <Route
               path="/patients"
               element={
@@ -727,15 +730,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           schedule: `Schedule/${scheduleId}`,
           status: 'free',
           start: `ge${new Date().toISOString()}`,
-          _count: '100',
+          _count: '1000',
         }),
       ]);
       if (schedule.active === false) {
         setError(new Error('Schedule đã được tắt.'));
         return;
       }
-      if (futureFreeSlots.length > 99) {
-        setError(new Error('Schedule cần hơn 100 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
+      if (futureFreeSlots.length > 999) {
+        setError(new Error('Schedule cần hơn 1.000 thao tác. Hãy ngừng một số series trước khi tắt Schedule.'));
         return;
       }
       const entries = [

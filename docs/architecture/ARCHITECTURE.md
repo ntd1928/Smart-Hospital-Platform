@@ -11,6 +11,7 @@ flowchart TD
   SDK --> API[Express :8103]
   API --> AUTH[Auth PKCE / token / membership]
   API --> FHIR[FHIR Router: Patient / Practitioner / Appointment / Schedule / Slot + transaction Bundle]
+  API --> FHIR[FHIR Router: Patient / Practitioner / Schedule / Slot / Appointment / Encounter / Condition / Observation]
   AUTH --> REPO[Repository + AccessPolicy + validation]
   FHIR --> REPO
   REPO --> APPT[Appointment rules: overlap check, practitioner lock, cancel rules]
@@ -34,7 +35,7 @@ User chứa tài khoản và password bcrypt hash. ProjectMembership nối User,
 
 Schedule gắn với Practitioner; Slot thuộc Schedule và có trạng thái `free`/`busy`. Appointment.participant.actor tham chiếu Patient/Practitioner, Appointment.slot tham chiếu Slot đã đặt. Repository kiểm tra khoảng thời gian chồng lấn giữa Appointment, giữa Slot trên các Schedule active của cùng Practitioner và giữa Slot với Appointment active, dùng transaction lock theo Practitioner. Patient.generalPractitioner lưu bác sĩ liên quan, chưa dùng làm luật giới hạn Doctor chỉ được xem người được phân công.
 
-Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR chưa triển khai.
+Resource lưu JSON serialized trong cột content kiểu TEXT, cùng cột tìm kiếm và lookup. Bảng Resource_History lưu phiên bản. Resource/history/lookup được ghi trong transaction. Xóa mềm trả 410 khi đọc bản hiện tại. API FHIR đã mở Encounter, Condition và Observation; app có trang hồ sơ cơ bản, staff ghi resource và Patient đọc lịch sử theo policy/compartment. Chưa có đầy đủ vòng đời lâm sàng, liên kết Encounter với Appointment đã khám hay lưu tài liệu cloud. Lịch sử phiên bản dữ liệu khác với lịch sử khám bệnh EHR.
 
 ## Lịch hẹn
 
