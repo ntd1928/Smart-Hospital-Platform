@@ -366,6 +366,22 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function stopMedicationRequest(request: MedicationRequest) {
+    if (!request.id || request.status !== 'active') return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<MedicationRequest>({ ...request, status: 'stopped' });
+      setMedicationRequests((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã ngừng yêu cầu thuốc.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
@@ -714,7 +730,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Đơn thuốc</h2>
         {medicationRequests.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lần khám</th></tr></thead>
+          <thead><tr><th>Ngày kê</th><th>Thuốc</th><th>Cách dùng</th><th>Số lượng</th><th>Trạng thái</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{medicationRequests.map((request) => {
             const encounter = encounters.find((item) => request.encounter?.reference === `Encounter/${item.id}`);
             const quantity = request.dispenseRequest?.quantity;
@@ -726,6 +742,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{quantity ? `${quantity.value ?? ''} ${quantity.unit ?? ''}` : '—'}{request.dispenseRequest?.numberOfRepeatsAllowed !== undefined ? ` · cấp thêm ${request.dispenseRequest.numberOfRepeatsAllowed} lần` : ''}</td>
                 <td>{request.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : request.encounter?.display ?? request.encounter?.reference ?? '—'}</td>
+                {role !== 'Patient' && <td>{request.status === 'active' && <button className="button" disabled={saving} onClick={() => void stopMedicationRequest(request)}>Ngừng đơn</button>}</td>}
               </tr>
             );
           })}</tbody>
