@@ -324,9 +324,19 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Chẩn đoán</h2>
-        {conditions.length ? <ul>{conditions.map((condition) => (
-          <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.clinicalStatus?.coding?.[0]?.code ?? condition.verificationStatus?.coding?.[0]?.code ?? ''}</li>
-        ))}</ul> : <p className="empty">Chưa có chẩn đoán trong phạm vi truy cập.</p>}
+        {conditions.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Lần khám</th></tr></thead>
+          <tbody>{conditions.map((condition) => {
+            const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
+            return (
+              <tr key={condition.id}>
+                <td>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'}</td>
+                <td>{condition.clinicalStatus?.coding?.[0]?.code ?? condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
+                <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table></div> : <p className="empty">Chưa có chẩn đoán trong phạm vi truy cập.</p>}
       </section>
       <section className="panel">
         <h2>Kết quả</h2>
