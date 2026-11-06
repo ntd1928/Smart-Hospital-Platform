@@ -107,6 +107,39 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createCondition(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const code = String(data.get('conditionCode')).trim();
+    if (!patientId || !code) {
+      setError(new Error('Chọn bệnh nhân và nhập chẩn đoán.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const encounterId = String(data.get('conditionEncounter') ?? '');
+      const condition = await client.createResource<Condition>({
+        resourceType: 'Condition',
+        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'active' }] },
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'confirmed' }] },
+        code: { text: code },
+        subject: { reference: `Patient/${patientId}` },
+        encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        recordedDate: new Date().toISOString(),
+      });
+      setConditions((current) => [condition, ...current]);
+      setMessage('Đã lưu chẩn đoán.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const selectedPatient = patients.find((patient) => patient.id === patientId);
   return (
     <>
@@ -155,6 +188,29 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>
               {saving ? 'Đang lưu…' : 'Tạo lần khám'}
+            </button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createCondition}>
+          <h2>Ghi chẩn đoán</h2>
+          <div className="form-grid">
+            <label className="full-width">Chẩn đoán<input name="conditionCode" maxLength={200} required /></label>
+            <label>Lần khám liên quan
+              <select name="conditionEncounter" defaultValue="">
+                <option value="">Không liên kết</option>
+                {encounters.map((encounter) => (
+                  <option key={encounter.id} value={encounter.id}>
+                    {encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : encounter.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>
+              {saving ? 'Đang lưu…' : 'Lưu chẩn đoán'}
             </button>
           </div>
         </form>
