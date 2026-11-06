@@ -408,6 +408,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const statusInput = String(data.get('statementStatus') ?? 'active');
     const effectiveDate = String(data.get('statementEffectiveDate') ?? '');
     const reason = String(data.get('statementReason') ?? '').trim();
+    const sourceType = String(data.get('statementSource') ?? 'patient');
     if (!patientId || !medication || !dosage || (effectiveDate && !Number.isFinite(new Date(effectiveDate).getTime()))) {
       setError(new Error('Chọn bệnh nhân, thuốc, cách dùng và ngày hợp lệ.'));
       return;
@@ -421,13 +422,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('statementEncounter') ?? '');
+      const medicationRequestId = String(data.get('statementMedicationRequest') ?? '');
       const statement = await client.createResource<MedicationStatement>({
         resourceType: 'MedicationStatement',
         status: statusInput,
         medicationCodeableConcept: { text: medication },
         subject: { reference: `Patient/${patientId}` },
-        informationSource: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        informationSource: sourceType === 'practitioner' && profile.id
+          ? { reference: `Practitioner/${profile.id}` }
+          : { reference: `Patient/${patientId}` },
         context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        basedOn: medicationRequestId ? [{ reference: `MedicationRequest/${medicationRequestId}` }] : undefined,
         dateAsserted: new Date().toISOString(),
         effectiveDateTime: effectiveDate ? new Date(`${effectiveDate}T00:00:00`).toISOString() : undefined,
         dosage: [{ text: dosage }],
@@ -890,6 +895,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <div className="form-grid">
             <label>Thuốc<input name="statementMedication" maxLength={200} required /></label>
             <label>Cách dùng đã khai báo<input name="statementDosage" maxLength={500} required /></label>
+            <label>Nguồn thông tin
+              <select name="statementSource" defaultValue="patient">
+                <option value="patient">Bệnh nhân báo</option>
+                <option value="practitioner">Nhân viên xác nhận</option>
+              </select>
+            </label>
             <label>Trạng thái
               <select name="statementStatus" defaultValue="active">
                 <option value="active">Đang dùng</option>
@@ -901,6 +912,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             </label>
             <label>Ngày bắt đầu<input name="statementEffectiveDate" type="date" /></label>
             <label>Lý do sử dụng hoặc trạng thái<input name="statementReason" maxLength={300} /></label>
+            <label>Đơn kê liên quan
+              <select name="statementMedicationRequest" defaultValue="">
+                <option value="">Không liên kết</option>
+                {medicationRequests.map((request) => (
+                  <option key={request.id} value={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? request.id}</option>
+                ))}
+              </select>
+            </label>
             <label>Lần khám liên quan
               <select name="statementEncounter" defaultValue="">
                 <option value="">Không liên kết</option>
@@ -1093,17 +1112,22 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Thuốc đang dùng và tiền sử dùng</h2>
         {medicationStatements.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày xác nhận</th><th>Thuốc</th><th>Cách dùng</th><th>Trạng thái</th><th>Lý do</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <thead><tr><th>Ngày xác nhận</th><th>Nguồn</th><th>Thuốc</th><th>Cách dùng</th><th>Trạng thái</th><th>Lý do</th><th>Đơn kê</th><th>Lần khám</th><th>Ghi chú audit</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{medicationStatements.map((statement) => {
             const encounter = encounters.find((item) => statement.context?.reference === `Encounter/${item.id}`);
+            const basedOnRequest = medicationRequests.find((request) => statement.basedOn?.some((reference) => reference.reference === `MedicationRequest/${request.id}`));
+            const sourceLabel = statement.informationSource?.reference === `Patient/${patientId}` ? 'Bệnh nhân báo' : statement.informationSource?.display ?? statement.informationSource?.reference ?? '—';
             return (
               <tr key={statement.id}>
                 <td>{statement.dateAsserted ? new Date(statement.dateAsserted).toLocaleDateString('vi-VN') : '—'}</td>
+                <td>{sourceLabel}</td>
                 <td>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
                 <td>{statement.dosage?.map((dose) => dose.text).filter(Boolean).join('; ') || '—'}</td>
                 <td>{statement.status}</td>
                 <td>{statement.statusReason?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join('; ') || '—'}</td>
+                <td>{basedOnRequest?.medicationCodeableConcept?.text ?? basedOnRequest?.medicationCodeableConcept?.coding?.[0]?.display ?? statement.basedOn?.map((reference) => reference.display ?? reference.reference).join(', ') ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : statement.context?.display ?? statement.context?.reference ?? '—'}</td>
+                <td>{statement.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 {role !== 'Patient' && <td><details>
                   <summary>Cập nhật</summary>
                   <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
