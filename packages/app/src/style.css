@@ -614,3 +614,52 @@ footer {
     font-size: 9px;
   }
 }
+
+.ehr-print-summary {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 16mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .ehr-print-summary,
+  .ehr-print-summary * {
+    visibility: visible !important;
+  }
+
+  .ehr-print-summary {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    color: #111;
+    background: #fff;
+    font: 11pt/1.45 Arial, sans-serif;
+  }
+
+  .ehr-print-summary h1 {
+    font-size: 20pt;
+  }
+
+  .ehr-print-summary h2 {
+    margin: 14pt 0 5pt;
+    color: #111;
+    font-size: 13pt;
+  }
+
+  .ehr-print-summary h3 {
+    margin: 9pt 0 3pt;
+    font-size: 11pt;
+  }
+
+  .ehr-print-summary ul {
+    margin: 4pt 0;
+    padding-left: 18pt;
+  }
+}

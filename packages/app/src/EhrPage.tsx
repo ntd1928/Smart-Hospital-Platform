@@ -862,7 +862,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
+  const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord ?? (role === 'Patient' ? profile as Patient : undefined);
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
   const ehrConsistencyFindings: string[] = [];
@@ -982,7 +982,34 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h1>Hồ sơ bệnh án</h1>
           <p className="muted">Encounter, chẩn đoán và kết quả được đọc từ FHIR API theo quyền truy cập.</p>
         </div>
+        {patientId && selectedPatient && <button className="button" disabled={loading} onClick={() => window.print()}>In tóm tắt hồ sơ</button>}
       </div>
+      {patientId && selectedPatient && !loading && <article className="ehr-print-summary" aria-hidden="true">
+        <h1>Tóm tắt hồ sơ bệnh án</h1>
+        <p><strong>Bệnh nhân:</strong> {personName(selectedPatient)}{selectedPatient.birthDate ? ` · Ngày sinh ${new Date(`${selectedPatient.birthDate}T00:00:00`).toLocaleDateString('vi-VN')}` : ''}</p>
+        <p><strong>Ngày lập:</strong> {new Date().toLocaleString('vi-VN')}</p>
+        <h2>Dị ứng đang hoạt động</h2>
+        {activeAllergies.length ? <ul>{activeAllergies.map((allergy) => <li key={allergy.id}>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ tác nhân'} · {allergy.verificationStatus?.coding?.[0]?.code ?? 'unknown'}{allergy.criticality ? ` · nguy cơ ${allergy.criticality}` : ''}{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).map((text) => ` · phản ứng ${text}`)}</li>)}</ul> : <p>Chưa ghi nhận.</p>}
+        <h2>Chẩn đoán đang hoạt động</h2>
+        {conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').length
+          ? <ul>{conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').map((condition) => <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.verificationStatus?.coding?.[0]?.code ?? 'unknown'}</li>)}</ul>
+          : <p>Chưa ghi nhận.</p>}
+        <h2>Thuốc đang dùng</h2>
+        {medicationStatements.filter((statement) => statement.status === 'active').length
+          ? <ul>{medicationStatements.filter((statement) => statement.status === 'active').map((statement) => <li key={statement.id}>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul>
+          : <p>Chưa có đối soát thuốc đang dùng.</p>}
+        {medicationRequests.some((request) => request.status === 'active') && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{medicationRequests.filter((request) => request.status === 'active').map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
+        <h2>Kết quả gần đây</h2>
+        {observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).length
+          ? <ul>{observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : 'Chưa có giá trị')} · {observation.status}</li>)}</ul>
+          : <p>Chưa ghi nhận.</p>}
+        <h2>Lần khám gần đây</h2>
+        {encounters.slice(0, 10).length
+          ? <ul>{encounters.slice(0, 10).map((encounter) => <li key={encounter.id}>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : 'Không có ngày'} · {encounter.status} · {encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || 'Chưa ghi lý do'}</li>)}</ul>
+          : <p>Chưa ghi nhận.</p>}
+        <hr />
+        <small>Tóm tắt được lập từ hồ sơ đã tải theo quyền truy cập hiện tại; không thay thế hồ sơ FHIR đầy đủ hoặc đánh giá lâm sàng.</small>
+      </article>}
       {role !== 'Patient' ? (
         <section className="panel editor">
           <label>
