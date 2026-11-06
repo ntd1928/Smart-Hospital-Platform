@@ -191,6 +191,26 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function confirmCondition(condition: Condition) {
+    const status = condition.verificationStatus?.coding?.[0]?.code;
+    if (!condition.id || !['provisional', 'unconfirmed', 'differential'].includes(status ?? '')) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Condition>({
+        ...condition,
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'confirmed' }] },
+      });
+      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã xác nhận chẩn đoán.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createObservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -383,7 +403,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
                 <td>{condition.abatementDateTime ? new Date(condition.abatementDateTime).toLocaleDateString('vi-VN') : condition.abatementPeriod?.end ? new Date(condition.abatementPeriod.end).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
-                {role !== 'Patient' && <td>{condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}</td>}
+                {role !== 'Patient' && <td>
+                  {['provisional', 'unconfirmed', 'differential'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '') && <button className="button" disabled={saving} onClick={() => void confirmCondition(condition)}>Xác nhận</button>}{' '}
+                  {condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}
+                </td>}
               </tr>
             );
           })}</tbody>
