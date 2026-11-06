@@ -20,7 +20,11 @@ export function findAvailableSlots(slots: Slot[], schedules: Schedule[], practit
     if (!schedule || schedule.active === false) return [];
     const practitionerReference = schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))
       ?.reference;
-    if (!practitionerReference || (practitionerId && practitionerReference !== `Practitioner/${practitionerId}`)) {
+    if (
+      !practitionerReference ||
+      !practitionerReference.slice('Practitioner/'.length) ||
+      (practitionerId && practitionerReference !== `Practitioner/${practitionerId}`)
+    ) {
       return [];
     }
     return [{ slot, practitionerReference }];
