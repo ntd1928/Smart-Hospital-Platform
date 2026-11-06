@@ -6,6 +6,12 @@ import type { FormEvent } from 'react';
 import { personName } from './access';
 import type { HospitalRole } from './access';
 
+const observationCategoryLabels: Record<string, string> = {
+  'vital-signs': 'Dấu hiệu sinh tồn',
+  laboratory: 'Xét nghiệm',
+  other: 'Khác',
+};
+
 export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }): React.ReactElement {
   const client = useMedplum();
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -186,7 +192,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const observation = await client.createResource<Observation>({
         resourceType: 'Observation',
         status: 'final',
-        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category }] }],
+        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category, display: observationCategoryLabels[category] ?? category }] }],
         code: { text: code },
         subject: { reference: `Patient/${patientId}` },
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
@@ -360,7 +366,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             return (
               <tr key={observation.id}>
                 <td>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleString('vi-VN') : '—'}</td>
-                <td>{observation.category?.[0]?.coding?.[0]?.code ?? '—'}</td>
+                <td>{observation.category?.[0]?.coding?.[0]?.display ?? observationCategoryLabels[observation.category?.[0]?.coding?.[0]?.code ?? ''] ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
                 <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
