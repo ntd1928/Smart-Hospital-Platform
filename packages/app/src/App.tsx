@@ -304,7 +304,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [createdRecurringSeriesId, setCreatedRecurringSeriesId] = useState<string>();
+  const [createdRecurringSeriesId, setCreatedRecurringSeriesId] = useState<string | undefined>(() =>
+    window.sessionStorage.getItem('smart-hospital.recurring-slot-series') ?? undefined
+  );
   const staff = role !== 'Patient';
 
   useEffect(() => {
@@ -590,6 +592,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           request: { method: 'POST', url: 'Slot' },
         })),
       });
+      window.sessionStorage.setItem('smart-hospital.recurring-slot-series', seriesId);
       setCreatedRecurringSeriesId(seriesId);
       setMessage(`Đã thêm ${availableIntervals.length} khung giờ; bỏ qua ${intervals.length - availableIntervals.length} khung giờ bị trùng.`);
       form.reset();
@@ -628,6 +631,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         });
       }
       setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
+      window.sessionStorage.removeItem('smart-hospital.recurring-slot-series');
       setCreatedRecurringSeriesId(undefined);
       setRefresh((value) => value + 1);
     } catch (e) {
