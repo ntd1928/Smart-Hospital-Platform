@@ -1,5 +1,5 @@
 import { normalizeErrorString } from '@medplum/core';
-import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationRequest, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Appointment, Condition, Encounter, MedicationRequest, MedicationStatement, Observation, Patient, Practitioner } from '@medplum/fhirtypes';
 import { useMedplum } from '@medplum/react';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -22,6 +22,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
   const [medicationRequests, setMedicationRequests] = useState<MedicationRequest[]>([]);
+  const [medicationStatements, setMedicationStatements] = useState<MedicationStatement[]>([]);
   const [allergies, setAllergies] = useState<AllergyIntolerance[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [error, setError] = useState<unknown>();
@@ -99,6 +100,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       for await (const page of client.searchResourcePages('AllergyIntolerance', { patient: patientReference, _count: '100', _sort: '-recorded-date' })) results.push(...page);
       return results;
     })();
+    const medicationStatementResultsPromise = (async () => {
+      const results: MedicationStatement[] = [];
+      for await (const page of client.searchResourcePages('MedicationStatement', { patient: patientReference, _count: '100', _sort: '-date-asserted' })) results.push(...page);
+      return results;
+    })();
     const appointmentResultsPromise = (async () => {
       const results: Appointment[] = [];
       for await (const page of client.searchResourcePages('Appointment', { patient: patientReference, _count: '100', _sort: '-date' })) results.push(...page);
@@ -110,15 +116,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       observationResultsPromise,
       medicationRequestResultsPromise,
       allergyResultsPromise,
+      medicationStatementResultsPromise,
       appointmentResultsPromise,
     ])
-      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, allergyResults, appointmentResults]) => {
+      .then(([encounterResults, conditionResults, observationResults, medicationRequestResults, allergyResults, medicationStatementResults, appointmentResults]) => {
         if (!live) return;
         setEncounters(encounterResults);
         setConditions(conditionResults);
         setObservations(observationResults);
         setMedicationRequests(medicationRequestResults);
         setAllergies(allergyResults);
+        setMedicationStatements(medicationStatementResults);
         setAppointments(appointmentResults);
       })
       .catch((e) => {
@@ -391,6 +399,90 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function createMedicationStatement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const medication = String(data.get('statementMedication') ?? '').trim();
+    const dosage = String(data.get('statementDosage') ?? '').trim();
+    const statusInput = String(data.get('statementStatus') ?? 'active');
+    const effectiveDate = String(data.get('statementEffectiveDate') ?? '');
+    const reason = String(data.get('statementReason') ?? '').trim();
+    if (!patientId || !medication || !dosage || (effectiveDate && !Number.isFinite(new Date(effectiveDate).getTime()))) {
+      setError(new Error('Chọn bệnh nhân, thuốc, cách dùng và ngày hợp lệ.'));
+      return;
+    }
+    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken') {
+      setError(new Error('Trạng thái thuốc đang dùng không hợp lệ.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const encounterId = String(data.get('statementEncounter') ?? '');
+      const statement = await client.createResource<MedicationStatement>({
+        resourceType: 'MedicationStatement',
+        status: statusInput,
+        medicationCodeableConcept: { text: medication },
+        subject: { reference: `Patient/${patientId}` },
+        informationSource: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        dateAsserted: new Date().toISOString(),
+        effectiveDateTime: effectiveDate ? new Date(`${effectiveDate}T00:00:00`).toISOString() : undefined,
+        dosage: [{ text: dosage }],
+        statusReason: reason ? [{ text: reason }] : undefined,
+      });
+      setMedicationStatements((current) => [statement, ...current]);
+      setMessage('Đã ghi nhận thuốc trong danh sách đối soát.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateMedicationStatement(statement: MedicationStatement, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!statement.id) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const statusInput = String(data.get('statementNextStatus') ?? '');
+    const reason = String(data.get('statementUpdateReason') ?? '').trim();
+    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken') {
+      setError(new Error('Trạng thái thuốc đang dùng không hợp lệ.'));
+      return;
+    }
+    if (!reason) {
+      setError(new Error('Nhập lý do cập nhật trạng thái thuốc.'));
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const time = new Date().toISOString();
+      const updated = await client.updateResource<MedicationStatement>({
+        ...statement,
+        status: statusInput,
+        statusReason: [{ text: reason }],
+        note: [...(statement.note ?? []), {
+          time,
+          text: `MedicationStatement chuyển sang ${statusInput}: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setMedicationStatements((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã cập nhật thuốc trong danh sách đối soát.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function updateMedicationRequestStatus(
     request: MedicationRequest,
     event: FormEvent<HTMLFormElement>
@@ -595,6 +687,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setConditions([]);
     setObservations([]);
     setMedicationRequests([]);
+    setMedicationStatements([]);
     setAllergies([]);
     setAppointments([]);
     setEncounterSearch('');
@@ -792,6 +885,37 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         </form>
       )}
       {role !== 'Patient' && (
+        <form className="panel editor" onSubmit={createMedicationStatement}>
+          <h2>Đối soát thuốc đang dùng</h2>
+          <div className="form-grid">
+            <label>Thuốc<input name="statementMedication" maxLength={200} required /></label>
+            <label>Cách dùng đã khai báo<input name="statementDosage" maxLength={500} required /></label>
+            <label>Trạng thái
+              <select name="statementStatus" defaultValue="active">
+                <option value="active">Đang dùng</option>
+                <option value="on-hold">Tạm ngưng</option>
+                <option value="not-taken">Không dùng</option>
+                <option value="stopped">Đã ngừng</option>
+                <option value="completed">Đã hoàn tất</option>
+              </select>
+            </label>
+            <label>Ngày bắt đầu<input name="statementEffectiveDate" type="date" /></label>
+            <label>Lý do sử dụng hoặc trạng thái<input name="statementReason" maxLength={300} /></label>
+            <label>Lần khám liên quan
+              <select name="statementEncounter" defaultValue="">
+                <option value="">Không liên kết</option>
+                {encounters.map((encounter) => (
+                  <option key={encounter.id} value={encounter.id}>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : encounter.id}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Lưu đối soát thuốc'}</button>
+          </div>
+        </form>
+      )}
+      {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createAllergyIntolerance}>
           <h2>Ghi nhận dị ứng</h2>
           <div className="form-grid">
@@ -965,6 +1089,41 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
             );
           })}</tbody>
         </table></div> : <p className="empty">{observations.length ? 'Không có kết quả phù hợp với bộ lọc.' : 'Chưa có kết quả trong phạm vi truy cập.'}</p>}
+      </section>
+      <section className="panel">
+        <h2>Thuốc đang dùng và tiền sử dùng</h2>
+        {medicationStatements.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Ngày xác nhận</th><th>Thuốc</th><th>Cách dùng</th><th>Trạng thái</th><th>Lý do</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <tbody>{medicationStatements.map((statement) => {
+            const encounter = encounters.find((item) => statement.context?.reference === `Encounter/${item.id}`);
+            return (
+              <tr key={statement.id}>
+                <td>{statement.dateAsserted ? new Date(statement.dateAsserted).toLocaleDateString('vi-VN') : '—'}</td>
+                <td>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
+                <td>{statement.dosage?.map((dose) => dose.text).filter(Boolean).join('; ') || '—'}</td>
+                <td>{statement.status}</td>
+                <td>{statement.statusReason?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join('; ') || '—'}</td>
+                <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : statement.context?.display ?? statement.context?.reference ?? '—'}</td>
+                {role !== 'Patient' && <td><details>
+                  <summary>Cập nhật</summary>
+                  <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
+                    <label>Trạng thái
+                      <select name="statementNextStatus" defaultValue={statement.status}>
+                        <option value="active">Đang dùng</option>
+                        <option value="on-hold">Tạm ngưng</option>
+                        <option value="not-taken">Không dùng</option>
+                        <option value="stopped">Đã ngừng</option>
+                        <option value="completed">Đã hoàn tất</option>
+                      </select>
+                    </label>
+                    <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
+                    <button className="button" disabled={saving}>Lưu thay đổi</button>
+                  </form>
+                </details></td>}
+              </tr>
+            );
+          })}</tbody>
+        </table></div> : <p className="empty">Chưa có bản ghi đối soát thuốc trong phạm vi truy cập.</p>}
       </section>
       <section className="panel">
         <h2>Đơn thuốc</h2>

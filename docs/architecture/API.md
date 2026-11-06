@@ -20,6 +20,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |
 | /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; quyền do policy/compartment kiểm tra |
 | /fhir/R4/MedicationRequest                      | CRUD/search yêu cầu thuốc; app lọc lịch sử, xem audit note và chuyển active sang stopped/cancelled/completed có lý do |
+| /fhir/R4/MedicationStatement                    | CRUD/search đối soát thuốc đang dùng và tiền sử dùng theo Patient compartment |
 | /fhir/R4/AllergyIntolerance                     | CRUD/search; staff review xác nhận/bác bỏ, kết thúc theo trạng thái; Patient compartment theo policy mặc định |
 | /fhir/R4/ProjectMembership                    | Quản trị trạng thái membership                |
 
@@ -27,7 +28,7 @@ POST `/fhir/R4` nhận FHIR transaction Bundle nếu mọi entry thuộc resourc
 
 Giao diện `/appointments` dùng FHIR API hiện có: Admin chọn Patient và Slot; Doctor chọn Patient và Slot gắn với profile của mình; Patient chỉ xem Appointment được trả về trong compartment cá nhân. Admin/Doctor có thể tạo Slot một lần trong Schedule của bác sĩ. Repository từ chối create/update Appointment có khoảng thời gian giao nhau, khóa theo project và Practitioner trong transaction, và chỉ cho chuyển sang `cancelled` lịch tương lai đang ở trạng thái `proposed`, `pending`, `booked` hoặc `waitlist`. Booking cập nhật Slot thành `busy` và tạo Appointment trong cùng transaction Bundle; hủy lịch cập nhật Appointment và đặt Slot về `free` trong cùng transaction.
 
-Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng và đã mở Encounter, Condition, Observation, MedicationRequest, AllergyIntolerance. App hỗ trợ ghi/xem yêu cầu thuốc và dị ứng cơ bản; Patient compartment dùng policy mặc định; chưa triển khai đầy đủ workflow EHR; Bot và $ai chưa mở.
+Whitelist trong router còn giữ resource quản trị/definitions cần cho nền tảng và đã mở Encounter, Condition, Observation, MedicationRequest, MedicationStatement, AllergyIntolerance. App hỗ trợ kê thuốc, đối soát thuốc đang dùng và ghi nhận dị ứng; Patient compartment dùng policy mặc định; chưa triển khai đầy đủ workflow EHR; Bot và $ai chưa mở.
 
 ```ts
 const patient = await medplum.createResource({
