@@ -170,6 +170,26 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function resolveCondition(condition: Condition) {
+    if (!condition.id || condition.clinicalStatus?.coding?.[0]?.code !== 'active') return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Condition>({
+        ...condition,
+        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'resolved' }] },
+        abatementDateTime: new Date().toISOString(),
+      });
+      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã đánh dấu chẩn đoán đã giải quyết.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createObservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -344,7 +364,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Chẩn đoán</h2>
         {conditions.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Lần khám</th></tr></thead>
+          <thead><tr><th>Chẩn đoán</th><th>Trạng thái</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{conditions.map((condition) => {
             const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
             return (
@@ -352,6 +372,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'}</td>
                 <td>{condition.clinicalStatus?.coding?.[0]?.code ?? condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
+                {role !== 'Patient' && <td>{condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}</td>}
               </tr>
             );
           })}</tbody>
