@@ -22,7 +22,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       .then((results) => {
         if (!live) return;
         setPatients(results);
-        if (!patientId && results[0]?.id) setPatientId(results[0].id);
+        if (results[0]?.id) setPatientId((current) => current || results[0].id || '');
       })
       .catch((e) => {
         if (live) setError(e);
@@ -30,7 +30,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     return () => {
       live = false;
     };
-  }, [client, patientId, role]);
+  }, [client, role]);
 
   useEffect(() => {
     if (!patientId) return;
