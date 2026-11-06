@@ -304,9 +304,21 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [createdRecurringSeriesId, setCreatedRecurringSeriesId] = useState<string | undefined>(() =>
-    window.sessionStorage.getItem('smart-hospital.recurring-slot-series') ?? undefined
-  );
+  const [recurringSeriesIds, setRecurringSeriesIds] = useState<string[]>(() => {
+    try {
+      const stored = window.sessionStorage.getItem('smart-hospital.recurring-slot-series-list');
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) return parsed;
+        return [];
+      }
+      const previous = window.sessionStorage.getItem('smart-hospital.recurring-slot-series');
+      return previous ? [previous] : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedRecurringSeriesId, setSelectedRecurringSeriesId] = useState<string>();
   const staff = role !== 'Patient';
 
   useEffect(() => {
@@ -601,8 +613,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           request: { method: 'POST', url: 'Slot' },
         })),
       });
-      window.sessionStorage.setItem('smart-hospital.recurring-slot-series', seriesId);
-      setCreatedRecurringSeriesId(seriesId);
+      const nextSeriesIds = [seriesId, ...recurringSeriesIds.filter((id) => id !== seriesId)].slice(0, 20);
+      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
+      setRecurringSeriesIds(nextSeriesIds);
+      setSelectedRecurringSeriesId(seriesId);
       setMessage(`Đã thêm ${availableIntervals.length} khung giờ; bỏ qua ${intervals.length - availableIntervals.length} khung giờ bị trùng.`);
       form.reset();
       setRefresh((value) => value + 1);
@@ -614,13 +628,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   }
 
   async function cancelCreatedRecurringSeries() {
-    if (!createdRecurringSeriesId || !window.confirm('Hủy các Slot trống trong tương lai của lịch lặp vừa tạo?')) return;
+    if (!selectedRecurringSeriesId || !window.confirm('Hủy các Slot trống trong tương lai của series đã chọn?')) return;
     setBusy(true);
     setError(undefined);
     setMessage('');
     try {
       const seriesSlots = await client.searchResources('Slot', {
-        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${createdRecurringSeriesId}`,
+        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${selectedRecurringSeriesId}`,
         status: 'free',
         start: `ge${new Date().toISOString()}`,
         _count: '100',
@@ -640,8 +654,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         });
       }
       setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
+      const nextSeriesIds = recurringSeriesIds.filter((id) => id !== selectedRecurringSeriesId);
+      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
       window.sessionStorage.removeItem('smart-hospital.recurring-slot-series');
-      setCreatedRecurringSeriesId(undefined);
+      setRecurringSeriesIds(nextSeriesIds);
+      setSelectedRecurringSeriesId(nextSeriesIds[0]);
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
@@ -804,10 +821,21 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
               {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
             </button>
-            {createdRecurringSeriesId && (
-              <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
-                Hủy Slot trống của lịch vừa tạo
-              </button>
+            {recurringSeriesIds.length > 0 && (
+              <>
+                <label>
+                  Series gần đây
+                  <select
+                    value={selectedRecurringSeriesId ?? recurringSeriesIds[0]}
+                    onChange={(event) => setSelectedRecurringSeriesId(event.currentTarget.value)}
+                  >
+                    {recurringSeriesIds.map((seriesId) => <option key={seriesId} value={seriesId}>{seriesId}</option>)}
+                  </select>
+                </label>
+                <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
+                  Hủy Slot trống của series đã chọn
+                </button>
+              </>
             )}
           </div>
         </form>
