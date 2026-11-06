@@ -12,6 +12,12 @@ const observationCategoryLabels: Record<string, string> = {
   other: 'Khác',
 };
 
+function localDateTimeInput(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '';
+}
+
 export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patient | Practitioner }): React.ReactElement {
   const client = useMedplum();
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -417,6 +423,49 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       });
       setObservations((current) => [observation, ...current]);
       setMessage('Đã lưu kết quả.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function amendObservation(observation: Observation, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!observation.id) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const code = String(data.get('observationUpdatedCode') ?? '').trim();
+    const dateTime = String(data.get('observationUpdatedDateTime') ?? '');
+    const numericValue = String(data.get('observationUpdatedNumericValue') ?? '').trim();
+    const textValue = String(data.get('observationUpdatedTextValue') ?? '').trim();
+    const unit = String(data.get('observationUpdatedUnit') ?? '').trim();
+    const reason = String(data.get('observationAmendmentReason') ?? '').trim();
+    if (!code || !dateTime || !Number.isFinite(new Date(dateTime).getTime()) || (!!numericValue === !!textValue) || (numericValue && !Number.isFinite(Number(numericValue))) || !reason) {
+      setError(new Error('Nhập chỉ số, thời điểm, đúng một giá trị hợp lệ và lý do sửa kết quả.'));
+      return;
+    }
+    const previousValue = observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}`.trim() : observation.valueString ?? 'Chưa có giá trị';
+    const nextValue = numericValue ? `${Number(numericValue)} ${unit}`.trim() : textValue;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Observation>({
+        ...observation,
+        status: 'amended',
+        code: { text: code },
+        effectiveDateTime: new Date(dateTime).toISOString(),
+        ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
+        note: [...(observation.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Kết quả được sửa: ${previousValue} → ${nextValue}. Lý do: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã sửa kết quả và lưu lý do vào ghi chú audit.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -1276,7 +1325,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <label>Đến ngày<input type="date" value={observationTo} onChange={(event) => setObservationTo(event.currentTarget.value)} /></label>
         </div>
         {filteredObservations.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Ngày</th><th>Phân loại</th><th>Chỉ số</th><th>Giá trị</th><th>Lần khám</th></tr></thead>
+          <thead><tr><th>Ngày</th><th>Phân loại</th><th>Chỉ số</th><th>Giá trị</th><th>Trạng thái</th><th>Lần khám</th><th>Ghi chú</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{filteredObservations.map((observation) => {
             const encounter = encounters.find((item) => observation.encounter?.reference === `Encounter/${item.id}`);
             return (
@@ -1285,7 +1334,21 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{observation.category?.[0]?.coding?.[0]?.display ?? observationCategoryLabels[observation.category?.[0]?.coding?.[0]?.code ?? ''] ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
                 <td>{observation.valueString ?? (observation.valueQuantity ? `${observation.valueQuantity.value ?? ''} ${observation.valueQuantity.unit ?? ''}` : '—')}</td>
+                <td>{observation.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
+                <td>{observation.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
+                {role !== 'Patient' && <td>{observation.status !== 'entered-in-error' ? <details>
+                  <summary>Sửa kết quả</summary>
+                  <form className="editor" onSubmit={(event) => void amendObservation(observation, event)}>
+                    <label>Chỉ số<input name="observationUpdatedCode" maxLength={200} defaultValue={observation.code.text ?? observation.code.coding?.[0]?.display ?? ''} required /></label>
+                    <label>Thời điểm<input name="observationUpdatedDateTime" type="datetime-local" defaultValue={localDateTimeInput(observation.effectiveDateTime)} required /></label>
+                    <label>Giá trị số<input name="observationUpdatedNumericValue" type="number" step="any" defaultValue={observation.valueQuantity?.value ?? ''} /></label>
+                    <label>Đơn vị<input name="observationUpdatedUnit" maxLength={40} defaultValue={observation.valueQuantity?.unit ?? ''} /></label>
+                    <label>Giá trị văn bản<input name="observationUpdatedTextValue" maxLength={200} defaultValue={observation.valueString ?? ''} /></label>
+                    <label>Lý do sửa<textarea name="observationAmendmentReason" maxLength={500} rows={2} required /></label>
+                    <button className="button" disabled={saving}>Lưu bản sửa</button>
+                  </form>
+                </details> : '—'}</td>}
               </tr>
             );
           })}</tbody>
