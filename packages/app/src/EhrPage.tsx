@@ -142,8 +142,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const form = event.currentTarget;
     const data = new FormData(form);
     const code = String(data.get('conditionCode')).trim();
-    if (!patientId || !code) {
-      setError(new Error('Chọn bệnh nhân và nhập chẩn đoán.'));
+    const onsetDate = String(data.get('conditionOnsetDate') ?? '');
+    if (!patientId || !code || (onsetDate && !Number.isFinite(new Date(onsetDate).getTime()))) {
+      setError(new Error('Chọn bệnh nhân, nhập chẩn đoán và ngày khởi phát hợp lệ.'));
       return;
     }
     setSaving(true);
@@ -159,6 +160,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         code: { text: code },
         subject: { reference: `Patient/${patientId}` },
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+        onsetDateTime: onsetDate ? new Date(`${onsetDate}T00:00:00`).toISOString() : undefined,
         recordedDate: new Date().toISOString(),
       });
       setConditions((current) => [condition, ...current]);
@@ -307,6 +309,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <h2>Ghi chẩn đoán</h2>
           <div className="form-grid">
             <label className="full-width">Chẩn đoán<input name="conditionCode" maxLength={200} required /></label>
+            <label>Ngày khởi phát<input name="conditionOnsetDate" type="date" /></label>
             <label>Xác minh
               <select name="conditionVerificationStatus" defaultValue="confirmed">
                 <option value="confirmed">Đã xác nhận</option>
