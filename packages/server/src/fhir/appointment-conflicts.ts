@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { Appointment, Slot } from '@medplum/fhirtypes';
+import type { Appointment, Schedule, Slot } from '@medplum/fhirtypes';
 import type { Repository } from './repo';
 
 const nonBlockingStatuses = new Set(['cancelled', 'entered-in-error', 'fulfilled', 'noshow']);
@@ -52,14 +52,32 @@ export async function findSlotConflict(repo: Repository, candidate: Slot, exclud
   const end = new Date(candidate.end);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return undefined;
 
+  const scheduleReferences = new Set([scheduleReference]);
+  const scheduleMatch = /^Schedule\/([^/]+)$/.exec(scheduleReference);
+  if (scheduleMatch) {
+    const schedule = await repo.readResource<Schedule>('Schedule', scheduleMatch[1]);
+    const practitionerReferences = schedule.actor
+      ?.map((actor) => actor.reference)
+      .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false);
+    for (const actor of practitionerReferences ?? []) {
+      await repo.processAllResources<Schedule>({ resourceType: 'Schedule', actor }, async (relatedSchedule) => {
+        if (relatedSchedule.active !== false && relatedSchedule.id) {
+          scheduleReferences.add(`Schedule/${relatedSchedule.id}`);
+        }
+      });
+    }
+  }
+
   let conflict: Slot | undefined;
-  await repo.processAllResources<Slot>({ resourceType: 'Slot', schedule: scheduleReference }, async (existing) => {
-    if (existing.id === excludeId || existing.status === 'entered-in-error' || !existing.start || !existing.end) return;
-    const existingStart = new Date(existing.start);
-    const existingEnd = new Date(existing.end);
-    if (!Number.isFinite(existingStart.getTime()) || !Number.isFinite(existingEnd.getTime())) return;
-    if (existingEnd > existingStart && start < existingEnd && existingStart < end) conflict = existing;
-  });
+  for (const reference of scheduleReferences) {
+    await repo.processAllResources<Slot>({ resourceType: 'Slot', schedule: reference }, async (existing) => {
+      if (existing.id === excludeId || existing.status === 'entered-in-error' || !existing.start || !existing.end) return;
+      const existingStart = new Date(existing.start);
+      const existingEnd = new Date(existing.end);
+      if (!Number.isFinite(existingStart.getTime()) || !Number.isFinite(existingEnd.getTime())) return;
+      if (existingEnd > existingStart && start < existingEnd && existingStart < end) conflict = existing;
+    });
+  }
   return conflict;
 }
 
