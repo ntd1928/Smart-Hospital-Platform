@@ -12,6 +12,22 @@ const observationCategoryLabels: Record<string, string> = {
   other: 'Khác',
 };
 
+const encounterNoteTypeLabels: Record<string, string> = {
+  progress: 'Diễn biến',
+  assessment: 'Đánh giá',
+  plan: 'Kế hoạch',
+  procedure: 'Thủ thuật',
+};
+
+function formatEncounterNote(type: string, text: string): string {
+  return `[${type}] ${text}`;
+}
+
+function renderEncounterNote(text: string): React.ReactNode {
+  const match = /^\[(progress|assessment|plan|procedure)\]\s*/.exec(text);
+  return match ? <><strong>{encounterNoteTypeLabels[match[1]]}:</strong> {text.slice(match[0].length)}</> : text;
+}
+
 function localDateTimeInput(value?: string): string {
   if (!value) return '';
   const date = new Date(value);
@@ -153,6 +169,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const start = new Date(`${String(data.get('encounterDate'))}T${String(data.get('encounterTime'))}`);
     const reason = String(data.get('encounterReason')).trim();
     const clinicalNote = String(data.get('encounterNote') ?? '').trim();
+    const clinicalNoteType = String(data.get('encounterNoteType') ?? 'progress');
     if (!patientId || !reason || !Number.isFinite(start.getTime())) {
       setError(new Error('Chọn bệnh nhân, thời gian và lý do khám hợp lệ.'));
       return;
@@ -170,7 +187,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         appointment: appointmentId ? [{ reference: `Appointment/${appointmentId}` }] : undefined,
         period: { start: start.toISOString() },
         reasonCode: [{ text: reason }],
-        note: clinicalNote ? [{ time: new Date().toISOString(), text: clinicalNote }] : undefined,
+        note: clinicalNote ? [{ time: new Date().toISOString(), text: formatEncounterNote(clinicalNoteType, clinicalNote), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
       });
       setEncounters((current) => [encounter, ...current]);
       setMessage('Đã tạo lần khám.');
@@ -249,7 +266,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     event.preventDefault();
     if (!encounter.id || encounter.status !== 'in-progress') return;
     const form = event.currentTarget;
-    const text = String(new FormData(form).get('encounterNote')).trim();
+    const data = new FormData(form);
+    const text = String(data.get('encounterNote') ?? '').trim();
+    const type = String(data.get('encounterNoteType') ?? 'progress');
     if (!text) return;
     setSaving(true);
     setError(undefined);
@@ -259,7 +278,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         ...encounter,
         note: [...(encounter.note ?? []), {
           time: new Date().toISOString(),
-          text,
+          text: formatEncounterNote(type, text),
           authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
         }],
       });
@@ -1030,7 +1049,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </select>
             </label>
             <label className="full-width">Lý do khám<input name="encounterReason" maxLength={200} required /></label>
-            <label className="full-width">Ghi chú diễn biến<textarea name="encounterNote" maxLength={4000} rows={4} /></label>
+            <label>Loại ghi chú
+              <select name="encounterNoteType" defaultValue="progress">
+                <option value="progress">Diễn biến</option>
+                <option value="assessment">Đánh giá</option>
+                <option value="plan">Kế hoạch</option>
+                <option value="procedure">Thủ thuật</option>
+              </select>
+            </label>
+            <label className="full-width">Ghi chú<textarea name="encounterNote" maxLength={4000} rows={4} /></label>
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={saving || !patientId}>
@@ -1264,7 +1291,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   {encounter.note.map((note, index) => (
                     <div key={`${note.time ?? 'note'}-${index}`}>
                       <small>{note.time ? new Date(note.time).toLocaleString('vi-VN') : 'Không có thời điểm'}{note.authorReference ? ` · ${note.authorReference.display ?? note.authorReference.reference ?? ''}` : ''}</small>
-                      <p>{note.text}</p>
+                      <p>{renderEncounterNote(note.text ?? '')}</p>
                     </div>
                   ))}
                 </div> : '—'}</td>
@@ -1285,6 +1312,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   <details>
                     <summary>Bổ sung ghi chú</summary>
                     <form className="editor" onSubmit={(event) => void addEncounterNote(encounter, event)}>
+                      <label>Loại ghi chú
+                        <select name="encounterNoteType" defaultValue="progress">
+                          <option value="progress">Diễn biến</option>
+                          <option value="assessment">Đánh giá</option>
+                          <option value="plan">Kế hoạch</option>
+                          <option value="procedure">Thủ thuật</option>
+                        </select>
+                      </label>
                       <textarea name="encounterNote" maxLength={4000} rows={3} required />
                       <button className="button" disabled={saving}>Lưu ghi chú</button>
                     </form>
