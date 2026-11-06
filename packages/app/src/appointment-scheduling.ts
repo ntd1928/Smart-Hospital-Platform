@@ -55,6 +55,21 @@ export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInt
   return results;
 }
 
+/** Keeps the first interval and drops any later intervals that overlap it. */
+export function removeOverlappingIntervals(intervals: SlotInterval[]): SlotInterval[] {
+  const ordered = [...intervals].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const result: SlotInterval[] = [];
+  let previousEnd = Number.NEGATIVE_INFINITY;
+  for (const interval of ordered) {
+    const start = interval.start.getTime();
+    const end = interval.end.getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start < previousEnd) continue;
+    result.push(interval);
+    previousEnd = end;
+  }
+  return result;
+}
+
 export function findAvailableSlots(slots: Slot[], schedules: Schedule[], practitionerId?: string): AvailableSlot[] {
   const schedulesByReference = new Map(schedules.map((schedule) => [`Schedule/${schedule.id}`, schedule]));
   return slots.flatMap((slot) => {
