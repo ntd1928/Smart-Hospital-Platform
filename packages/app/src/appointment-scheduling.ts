@@ -7,6 +7,19 @@ export interface AvailableSlot {
   practitionerReference: string;
 }
 
+export interface RecurringSlotInput {
+  startDate: Date;
+  endDate: Date;
+  startTime: string;
+  endTime: string;
+  weekdays: number[];
+}
+
+export interface SlotInterval {
+  start: Date;
+  end: Date;
+}
+
 export function findAvailableSlots(slots: Slot[], schedules: Schedule[], practitionerId?: string): AvailableSlot[] {
   const schedulesByReference = new Map(schedules.map((schedule) => [`Schedule/${schedule.id}`, schedule]));
   return slots.flatMap((slot) => {
