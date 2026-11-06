@@ -274,6 +274,8 @@ async function createAdminAccessPolicy(
  */
 export const PRACTITIONER_READONLY_RESOURCE_TYPES: ResourceType[] = [
   'MedicationAdministration',
+  'Organization',
+  'HealthcareService',
   'MedicationKnowledge',
   'PlanDefinition',
   'ActivityDefinition',

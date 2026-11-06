@@ -16,6 +16,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | GET/PUT/DELETE /fhir/R4/Patient/:id           | Xem/sửa/xóa mềm                               |
 | GET /fhir/R4/Patient/:id/_history             | Lịch sử phiên bản                             |
 | /fhir/R4/Practitioner                         | CRUD/search tương tự                          |
+| /fhir/R4/Organization, HealthcareService      | Admin quản lý Khoa phân cấp và dịch vụ gắn với Khoa; Practitioner chỉ đọc qua policy |
 | /fhir/R4/Appointment                          | CRUD/search; Patient dùng `$available`, `$book`, `$cancel`, `$reschedule` để xem lịch trống 90 ngày và quản lý lịch của mình; các thao tác cập nhật Slot và Appointment atomically; staff ghi nhận fulfilled hoặc noshow sau giờ hẹn kèm lý do audit |
 | /fhir/R4/Schedule, /fhir/R4/Slot               | CRUD/search theo FHIR R4; quyền do policy kiểm tra |
 | /fhir/R4/Encounter, Condition, Observation      | CRUD/search cơ bản; EHR có tóm tắt hồ sơ để in từ tài nguyên đã tải; ghi chú Encounter có loại diễn biến/đánh giá/kế hoạch/thủ thuật; Observation cho staff sửa kết quả sang amended hoặc đánh dấu entered-in-error kèm lý do/audit note; rà soát tham chiếu trong hồ sơ đã tải; cập nhật Encounter/Condition có audit note; quyền do policy/compartment kiểm tra |

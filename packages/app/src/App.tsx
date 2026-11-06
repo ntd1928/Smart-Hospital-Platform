@@ -6,6 +6,7 @@ import type { FormEvent } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { getRole, personName, ROLE_LABELS } from './access';
 import { EhrPage } from './EhrPage';
+import { DepartmentsPage } from './DepartmentsPage';
 import {
   expandRecurringSlotIntervals,
   findAppointmentConflict,
@@ -112,6 +113,7 @@ export function App() {
           <NavLink to="/appointments">◷ Lịch hẹn</NavLink>
           <NavLink to="/records">▤ Bệnh án</NavLink>
           {role === 'Admin' && <NavLink to="/users">▤ Người dùng</NavLink>}
+          {role === 'Admin' && <NavLink to="/departments">⌂ Khoa & dịch vụ</NavLink>}
         </nav>
         <div className="sidebar-bottom">
           <span className="status-dot" /> Local environment<small>Powered by Medplum · FHIR R4</small>
@@ -169,6 +171,7 @@ export function App() {
               element={role !== 'Patient' ? <PersonDetails type="Practitioner" /> : <Forbidden />}
             />
             <Route path="/users" element={role === 'Admin' ? <Users /> : <Forbidden />} />
+            <Route path="/departments" element={role === 'Admin' ? <DepartmentsPage /> : <Forbidden />} />
             <Route path="/signin" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>

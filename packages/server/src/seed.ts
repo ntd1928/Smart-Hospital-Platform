@@ -65,11 +65,11 @@ export async function seedDatabase(config: ServerConfig): Promise<void> {
   }
 }
 
-/** Keep Patient compartment policies scoped and prevent direct Practitioner administration writes. */
+/** Keep Patient compartment policies scoped and restrict direct Practitioner clinical/directory writes. */
 async function reconcileDefaultMedicationPolicies(systemRepo: SystemRepository): Promise<void> {
   await systemRepo.processAllResources<Project>({ resourceType: 'Project' }, async (project) => {
     await reconcilePatientClinicalPolicy(systemRepo, project);
-    await reconcilePractitionerAdministrationPolicy(systemRepo, project);
+    await reconcilePractitionerRestrictedWritePolicy(systemRepo, project);
   });
 }
 
@@ -130,16 +130,17 @@ async function reconcilePatientClinicalPolicy(systemRepo: SystemRepository, proj
   globalLogger.info('Reconciled default Patient clinical policy', { projectId: project.id });
 }
 
-async function reconcilePractitionerAdministrationPolicy(systemRepo: SystemRepository, project: WithId<Project>): Promise<void> {
+async function reconcilePractitionerRestrictedWritePolicy(systemRepo: SystemRepository, project: WithId<Project>): Promise<void> {
   const practitionerPolicyRef = project.defaultAccessPolicies?.find((policy) => policy.profileType === 'Practitioner')?.accessPolicy;
   const policyId = practitionerPolicyRef?.reference?.match(/^AccessPolicy\/([^/]+)$/)?.[1];
   if (!policyId) return;
   const policy = await systemRepo.readResource<AccessPolicy>('AccessPolicy', policyId);
   if (policy.name !== 'Default Practitioner Access Policy' || policy.meta?.project !== project.id) return;
-  const resource = policy.resource?.filter((rule) => rule.resourceType !== 'MedicationAdministration');
+  const restrictedTypes = new Set(['MedicationAdministration', 'Organization', 'HealthcareService']);
+  const resource = policy.resource?.filter((rule) => !restrictedTypes.has(rule.resourceType ?? ''));
   if (resource?.length === policy.resource?.length) return;
   await systemRepo.updateResource<AccessPolicy>({ ...policy, resource });
-  globalLogger.info('Restricted direct Practitioner MedicationAdministration writes', { projectId: project.id });
+  globalLogger.info('Restricted direct Practitioner clinical and directory writes', { projectId: project.id });
 }
 
 async function createR4Project(systemRepo: SystemRepository): Promise<WithId<Project>> {

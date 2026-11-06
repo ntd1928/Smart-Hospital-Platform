@@ -282,6 +282,25 @@ small {
   margin-bottom: 0;
   font-size: 11px;
 }
+.directory-card {
+  display: grid;
+  gap: 14px;
+  padding: 22px 25px;
+  border-top: 1px solid #e9eee9;
+}
+.directory-card .panel-heading {
+  padding: 0;
+}
+.directory-card h3,
+.directory-card h4 {
+  margin: 0;
+}
+.directory-card ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 20px;
+}
 .pill {
   display: inline-block;
   border-radius: 5px;

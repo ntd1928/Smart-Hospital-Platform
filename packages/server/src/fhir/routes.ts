@@ -28,6 +28,7 @@ export const SUPPORTED_FHIR_RESOURCES = [
   'Schedule',
   'Slot',
   'Organization',
+  'HealthcareService',
   'User',
   'Project',
   'ProjectMembership',
