@@ -303,12 +303,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <h2>Lần khám</h2>
         {encounters.length ? (
           <div className="table-wrap"><table>
-            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th><th>Appointment</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
             <tbody>{encounters.map((encounter) => (
               <tr key={encounter.id}>
                 <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
                 <td>{encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || '—'}</td>
+                <td>{encounter.appointment?.map((reference) => {
+                  const appointment = appointments.find((item) => reference.reference === `Appointment/${item.id}`);
+                  return appointment?.start ? new Date(appointment.start).toLocaleString('vi-VN') : reference.display ?? reference.reference;
+                }).join(', ') || '—'}</td>
                 {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <>
                   <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'finished')}>Kết thúc</button>{' '}
                   <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'cancelled')}>Hủy</button>
