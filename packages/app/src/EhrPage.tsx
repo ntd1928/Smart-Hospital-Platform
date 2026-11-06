@@ -738,6 +738,34 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? selectedPatientRecord;
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
+  const ehrConsistencyFindings: string[] = [];
+  const encounterIds = new Set(encounters.map((item) => item.id).filter(Boolean));
+  const appointmentById = new Map(appointments.filter((item) => item.id).map((item) => [item.id as string, item]));
+  const medicationRequestIds = new Set(medicationRequests.map((item) => item.id).filter(Boolean));
+  for (const encounter of encounters) {
+    for (const reference of encounter.appointment ?? []) {
+      const match = /^Appointment\/([^/]+)$/.exec(reference.reference ?? '');
+      if (!match) continue;
+      const appointment = appointmentById.get(match[1]);
+      if (!appointment) ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} chưa có trong hồ sơ được tải.`);
+      else if (appointment.status !== 'fulfilled') ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} đang ở trạng thái ${appointment.status}, không phải fulfilled.`);
+    }
+  }
+  const checkEncounterReference = (resourceType: string, resourceId: string | undefined, reference: string | undefined): void => {
+    if (!reference) return;
+    const match = /^Encounter\/([^/]+)$/.exec(reference);
+    if (match && !encounterIds.has(match[1])) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} chưa có trong hồ sơ được tải.`);
+  };
+  for (const condition of conditions) checkEncounterReference('Condition', condition.id, condition.encounter?.reference);
+  for (const observation of observations) checkEncounterReference('Observation', observation.id, observation.encounter?.reference);
+  for (const request of medicationRequests) checkEncounterReference('MedicationRequest', request.id, request.encounter?.reference);
+  for (const statement of medicationStatements) {
+    checkEncounterReference('MedicationStatement', statement.id, statement.context?.reference);
+    for (const reference of statement.basedOn ?? []) {
+      const match = /^MedicationRequest\/([^/]+)$/.exec(reference.reference ?? '');
+      if (match && !medicationRequestIds.has(match[1])) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+    }
+  }
   const activeAllergies = allergies.filter((allergy) =>
     allergy.clinicalStatus?.coding?.[0]?.code === 'active' &&
     !['refuted', 'entered-in-error'].includes(allergy.verificationStatus?.coding?.[0]?.code ?? '')
@@ -870,6 +898,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
         <section className="stat-card"><span>Kết quả</span><strong>{observations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
       </div>}
+      {patientId && !loading && <section className={`notice ${ehrConsistencyFindings.length ? 'error' : ''}`} aria-live="polite">
+        <strong>Rà soát liên kết hồ sơ:</strong>{' '}
+        {ehrConsistencyFindings.length
+          ? <><span>{ehrConsistencyFindings.length} điểm cần kiểm tra. Tham chiếu chưa tải có thể nằm ngoài quyền truy cập hiện tại.</span><ul>{ehrConsistencyFindings.map((finding, index) => <li key={`${finding}-${index}`}>{finding}</li>)}</ul></>
+          : <span>Không phát hiện tham chiếu Encounter/Appointment/MedicationRequest chưa khớp trong dữ liệu đã tải.</span>}
+        <small>Đây là rà soát liên kết dữ liệu, không xác nhận tính đúng đắn lâm sàng.</small>
+      </section>}
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createEncounter}>
           <h2>Ghi nhận lần khám</h2>
