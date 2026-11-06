@@ -107,7 +107,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function finishEncounter(encounter: Encounter) {
+  async function updateEncounterStatus(encounter: Encounter, status: 'finished' | 'cancelled') {
     if (!encounter.id || encounter.status !== 'in-progress') return;
     setSaving(true);
     setError(undefined);
@@ -119,11 +119,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       }
       const updated = await client.updateResource<Encounter>({
         ...encounter,
-        status: 'finished',
+        status,
         period: { ...encounter.period, end: end.toISOString() },
       });
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã kết thúc lần khám.');
+      setMessage(status === 'finished' ? 'Đã kết thúc lần khám.' : 'Đã hủy lần khám.');
     } catch (e) {
       setError(e);
     } finally {
@@ -309,7 +309,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
                 <td>{encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || '—'}</td>
-                {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <button className="button" disabled={saving} onClick={() => void finishEncounter(encounter)}>Kết thúc</button>}</td>}
+                {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <>
+                  <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'finished')}>Kết thúc</button>{' '}
+                  <button className="button" disabled={saving} onClick={() => void updateEncounterStatus(encounter, 'cancelled')}>Hủy</button>
+                </>}</td>}
               </tr>
             ))}</tbody>
           </table></div>
