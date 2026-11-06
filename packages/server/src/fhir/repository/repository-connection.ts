@@ -26,6 +26,7 @@ import { TransactionIdleTracker } from './transaction-idle-tracker';
 const defaultTransactionAttempts = 3;
 const defaultExpBackoffBaseDelayMs = 50;
 const transactionIsolationLevelPriority: Record<TransactionIsolationLevel, number> = {
+  'READ COMMITTED': 0,
   'REPEATABLE READ': 1,
   SERIALIZABLE: 2,
 };
@@ -505,6 +506,7 @@ export class RepositoryConnection implements Disposable {
    *   all database work in the callback must present this scope, not the parent.
    * @param options - Optional transaction settings.
    * @param options.serializable - Use `SERIALIZABLE` isolation instead of `REPEATABLE READ`.
+   * @param options.isolationLevel - Explicit isolation level; defaults to `REPEATABLE READ`.
    * @returns The callback's return value, after the transaction level commits.
    */
   async withTransaction<TResult>(
@@ -513,7 +515,7 @@ export class RepositoryConnection implements Disposable {
     options: TransactionSqlOptions
   ): Promise<TResult> {
     this.assertNotClosed();
-    const isolationLevel = options.serializable ? 'SERIALIZABLE' : 'REPEATABLE READ';
+    const isolationLevel = options.isolationLevel ?? (options.serializable ? 'SERIALIZABLE' : 'REPEATABLE READ');
 
     const config = getConfig();
     const transactionAttempts = config.transactionAttempts ?? defaultTransactionAttempts;

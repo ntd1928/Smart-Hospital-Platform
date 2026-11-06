@@ -1,16 +1,18 @@
 import { isOk, OperationOutcomeError } from '@medplum/core';
-import { FhirRouter } from '@medplum/fhir-router';
-import type { HttpMethod } from '@medplum/fhir-router';
+import { FhirRouter, processBatch } from '@medplum/fhir-router';
+import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
 import { Router } from 'express';
 import { getAuthenticatedContext } from '../context';
 import { authenticateRequest } from '../oauth/middleware';
 import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
-export const WEEK6_RESOURCES = [
+export const SUPPORTED_FHIR_RESOURCES = [
   'Patient',
   'Practitioner',
   'Appointment',
+  'Schedule',
+  'Slot',
   'Organization',
   'User',
   'Project',
@@ -36,7 +38,8 @@ fhirRouter.get('/metadata', (_req, res) =>
     rest: [
       {
         mode: 'server',
-        resource: WEEK6_RESOURCES.map((type) => ({
+        interaction: [{ code: 'transaction' }],
+        resource: SUPPORTED_FHIR_RESOURCES.map((type) => ({
           type,
           interaction: ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'].map(
             (code) => ({ code })
@@ -50,28 +53,48 @@ fhirRouter.use(authenticateRequest);
 const router = new FhirRouter({ introspectionEnabled: true });
 router.add('POST', '/Project/$init', projectInitHandler);
 fhirRouter.use(async (req, res) => {
+  const ctx = getAuthenticatedContext();
+  const fhirRequest: FhirRequest = {
+    method: req.method as HttpMethod,
+    url: req.url,
+    pathname: '',
+    params: {},
+    query: Object.create(null),
+    body: req.body ?? {},
+    headers: req.headers,
+    config: {},
+  };
+  if (
+    req.method === 'POST' &&
+    (req.path === '/' || req.path === '') &&
+    req.body?.resourceType === 'Bundle' &&
+    req.body.type === 'transaction'
+  ) {
+    const entries = Array.isArray(req.body.entry) ? req.body.entry : [];
+    const unsupported = entries.find((entry: any) => {
+      const url = String(entry?.request?.url ?? '').replace(/^.*\/fhir\/R4\//, '').replace(/^\//, '');
+      const resourceType = entry?.resource?.resourceType ?? url.split(/[/?]/)[0];
+      return !SUPPORTED_FHIR_RESOURCES.includes(resourceType);
+    });
+    if (unsupported) {
+      res.status(404).json({
+        resourceType: 'OperationOutcome',
+        issue: [{ severity: 'error', code: 'not-supported', diagnostics: 'Bundle entry resource is not enabled' }],
+      });
+      return;
+    }
+    res.status(200).json(await processBatch(fhirRequest, ctx.repo, router, req.body));
+    return;
+  }
   const resourceType = req.path.split('/')[1];
-  if (!WEEK6_RESOURCES.includes(resourceType)) {
+  if (!SUPPORTED_FHIR_RESOURCES.includes(resourceType)) {
     res.status(404).json({
       resourceType: 'OperationOutcome',
-      issue: [{ severity: 'error', code: 'not-supported', diagnostics: 'Resource outside weeks 5–6 scope' }],
+      issue: [{ severity: 'error', code: 'not-supported', diagnostics: 'Resource is not enabled for this deployment' }],
     });
     return;
   }
-  const ctx = getAuthenticatedContext();
-  const result = await router.handleRequest(
-    {
-      method: req.method as HttpMethod,
-      url: req.url,
-      pathname: '',
-      params: {},
-      query: Object.create(null),
-      body: req.body ?? {},
-      headers: req.headers,
-      config: {},
-    },
-    ctx.repo
-  );
+  const result = await router.handleRequest(fhirRequest, ctx.repo);
   if (!isOk(result[0])) throw new OperationOutcomeError(result[0]);
   if (result.length === 1) {
     res.sendStatus(204);
