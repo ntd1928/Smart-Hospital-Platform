@@ -29,6 +29,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [conditionSearch, setConditionSearch] = useState('');
   const [conditionClinicalStatus, setConditionClinicalStatus] = useState('');
   const [conditionVerificationStatus, setConditionVerificationStatus] = useState('');
+  const [observationSearch, setObservationSearch] = useState('');
+  const [observationCategory, setObservationCategory] = useState('');
+  const [observationFrom, setObservationFrom] = useState('');
+  const [observationTo, setObservationTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -310,6 +314,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!conditionClinicalStatus || condition.clinicalStatus?.coding?.[0]?.code === conditionClinicalStatus)
       && (!conditionVerificationStatus || condition.verificationStatus?.coding?.[0]?.code === conditionVerificationStatus);
   });
+  const observationQuery = observationSearch.trim().toLocaleLowerCase();
+  const filteredObservations = observations.filter((observation) => {
+    const code = observation.code.text ?? observation.code.coding?.[0]?.display ?? '';
+    const effectiveDate = observation.effectiveDateTime?.slice(0, 10) ?? '';
+    return (!observationQuery || code.toLocaleLowerCase().includes(observationQuery))
+      && (!observationCategory || observation.category?.some((category) => category.coding?.some((coding) => coding.code === observationCategory)))
+      && (!observationFrom || (effectiveDate && effectiveDate >= observationFrom))
+      && (!observationTo || (effectiveDate && effectiveDate <= observationTo));
+  });
   return (
     <>
       <div className="page-heading">
@@ -523,9 +536,24 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Kết quả</h2>
-        {observations.length ? <div className="table-wrap"><table>
+        <div className="form-grid">
+          <label className="full-width">Tìm chỉ số
+            <input value={observationSearch} onChange={(event) => setObservationSearch(event.currentTarget.value)} />
+          </label>
+          <label>Phân loại
+            <select value={observationCategory} onChange={(event) => setObservationCategory(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="vital-signs">Dấu hiệu sinh tồn</option>
+              <option value="laboratory">Xét nghiệm</option>
+              <option value="other">Khác</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={observationFrom} onChange={(event) => setObservationFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={observationTo} onChange={(event) => setObservationTo(event.currentTarget.value)} /></label>
+        </div>
+        {filteredObservations.length ? <div className="table-wrap"><table>
           <thead><tr><th>Ngày</th><th>Phân loại</th><th>Chỉ số</th><th>Giá trị</th><th>Lần khám</th></tr></thead>
-          <tbody>{observations.map((observation) => {
+          <tbody>{filteredObservations.map((observation) => {
             const encounter = encounters.find((item) => observation.encounter?.reference === `Encounter/${item.id}`);
             return (
               <tr key={observation.id}>
@@ -537,7 +565,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có kết quả trong phạm vi truy cập.</p>}
+        </table></div> : <p className="empty">{observations.length ? 'Không có kết quả phù hợp với bộ lọc.' : 'Chưa có kết quả trong phạm vi truy cập.'}</p>}
       </section>
       {role !== 'Patient' && selectedPatient && <p className="muted">Bác sĩ/nhân viên: dữ liệu chỉ hiện khi FHIR API cho phép đọc bệnh nhân đã chọn.</p>}
     </>
