@@ -850,7 +850,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     try {
       const encounterId = String(data.get('statementEncounter') ?? '');
       const medicationRequestId = String(data.get('statementMedicationRequest') ?? '');
-      const statement = await client.createResource<MedicationStatement>({
+      const resource: MedicationStatement = {
         resourceType: 'MedicationStatement',
         status: statusInput,
         medicationCodeableConcept: { text: medication },
@@ -869,7 +869,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           timing: frequency ? { code: { text: frequency } } : undefined,
         }],
         statusReason: reason ? [{ text: reason }] : undefined,
+      };
+      const recorded = await client.post<Parameters>('fhir/R4/MedicationStatement/$record', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'resource', resource },
+          { name: 'source', valueCode: sourceType },
+        ],
       });
+      const statement = recorded.parameter?.find((item) => item.name === 'return')?.resource as MedicationStatement | undefined;
+      if (!statement) throw new Error('Server did not return the reconciled MedicationStatement.');
       setMedicationStatements((current) => [statement, ...current]);
       setMessage('Đã ghi nhận thuốc trong danh sách đối soát.');
       form.reset();
@@ -899,17 +908,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const time = new Date().toISOString();
-      const updated = await client.updateResource<MedicationStatement>({
-        ...statement,
-        status: statusInput,
-        statusReason: [{ text: reason }],
-        note: [...(statement.note ?? []), {
-          time,
-          text: `MedicationStatement chuyển sang ${statusInput}: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/MedicationStatement/$update-status', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'statement', valueReference: { reference: `MedicationStatement/${statement.id}` } },
+          { name: 'status', valueCode: statusInput },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationStatement | undefined;
+      if (!updated) throw new Error('Server did not return the updated MedicationStatement.');
       setMedicationStatements((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã cập nhật thuốc trong danh sách đối soát.');
       form.reset();

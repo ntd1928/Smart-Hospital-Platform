@@ -206,6 +206,11 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       };
       if (scopedSearchParameters) {
         scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
+        if (resourceType === 'MedicationStatement') {
+          scopedRule.readonly = true;
+          const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
+          scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');
+        }
         if (resourceType === 'Patient' && !scopedRule.readonly) {
           const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
           scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'delete');
