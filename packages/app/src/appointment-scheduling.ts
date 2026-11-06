@@ -70,6 +70,22 @@ export function removeOverlappingIntervals(intervals: SlotInterval[]): SlotInter
   return result;
 }
 
+/** Drops generated intervals that overlap an existing non-invalid Slot. */
+export function removeIntervalsConflictingWithSlots(intervals: SlotInterval[], slots: Slot[]): SlotInterval[] {
+  const occupied = slots.flatMap((slot) => {
+    if (slot.status === 'entered-in-error' || !slot.start || !slot.end) return [];
+    const start = new Date(slot.start);
+    const end = new Date(slot.end);
+    return Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end > start ? [{ start, end }] : [];
+  });
+  return intervals.filter(({ start, end }) => {
+    const intervalStart = start.getTime();
+    const intervalEnd = end.getTime();
+    if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd) || intervalEnd <= intervalStart) return false;
+    return !occupied.some((existing) => intervalStart < existing.end.getTime() && existing.start.getTime() < intervalEnd);
+  });
+}
+
 export function findAvailableSlots(slots: Slot[], schedules: Schedule[], practitionerId?: string): AvailableSlot[] {
   const schedulesByReference = new Map(schedules.map((schedule) => [`Schedule/${schedule.id}`, schedule]));
   return slots.flatMap((slot) => {
