@@ -264,26 +264,6 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function resolveCondition(condition: Condition) {
-    if (!condition.id || condition.clinicalStatus?.coding?.[0]?.code !== 'active') return;
-    setSaving(true);
-    setError(undefined);
-    setMessage('');
-    try {
-      const updated = await client.updateResource<Condition>({
-        ...condition,
-        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'resolved' }] },
-        abatementDateTime: new Date().toISOString(),
-      });
-      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã đánh dấu chẩn đoán đã giải quyết.');
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function confirmCondition(condition: Condition) {
     const status = condition.verificationStatus?.coding?.[0]?.code;
     if (!condition.id || !['provisional', 'unconfirmed', 'differential'].includes(status ?? '')) return;
@@ -297,6 +277,69 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       });
       setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã xác nhận chẩn đoán.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateConditionClinicalStatus(condition: Condition, status: 'active' | 'inactive' | 'resolved', event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const currentStatus = condition.clinicalStatus?.coding?.[0]?.code;
+    if (!condition.id || (status === 'active' ? currentStatus !== 'inactive' : currentStatus !== 'active')) return;
+    const data = new FormData(event.currentTarget);
+    const reason = String(data.get('conditionStatusReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Condition>({
+        ...condition,
+        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: status }] },
+        ...(status === 'resolved' ? { abatementDateTime: new Date().toISOString() } : status === 'active' ? { abatementDateTime: undefined } : {}),
+        note: [...(condition.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Trạng thái chẩn đoán chuyển sang ${status}: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã cập nhật trạng thái chẩn đoán và lưu lý do.');
+      (event.currentTarget as HTMLFormElement).reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function refuteCondition(condition: Condition, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!condition.id || ['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')) return;
+    const data = new FormData(event.currentTarget);
+    const reason = String(data.get('conditionRefutationReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const updated = await client.updateResource<Condition>({
+        ...condition,
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'refuted' }] },
+        clinicalStatus: condition.clinicalStatus?.coding?.[0]?.code === 'active'
+          ? { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'inactive' }] }
+          : condition.clinicalStatus,
+        note: [...(condition.note ?? []), {
+          time: new Date().toISOString(),
+          text: `Chẩn đoán bị bác bỏ: ${reason}`,
+          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
+        }],
+      });
+      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã bác bỏ chẩn đoán và lưu lý do.');
+      (event.currentTarget as HTMLFormElement).reset();
     } catch (e) {
       setError(e);
     } finally {
@@ -1091,7 +1134,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           </label>
         </div>
         {filteredConditions.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Chẩn đoán</th><th>Trạng thái lâm sàng</th><th>Xác minh</th><th>Ngày giải quyết</th><th>Lần khám</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <thead><tr><th>Chẩn đoán</th><th>Trạng thái lâm sàng</th><th>Xác minh</th><th>Ngày giải quyết</th><th>Lần khám</th><th>Ghi chú</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{filteredConditions.map((condition) => {
             const encounter = encounters.find((item) => condition.encounter?.reference === `Encounter/${item.id}`);
             return (
@@ -1101,9 +1144,31 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{condition.verificationStatus?.coding?.[0]?.code ?? '—'}</td>
                 <td>{condition.abatementDateTime ? new Date(condition.abatementDateTime).toLocaleDateString('vi-VN') : condition.abatementPeriod?.end ? new Date(condition.abatementPeriod.end).toLocaleDateString('vi-VN') : '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
+                <td>{condition.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 {role !== 'Patient' && <td>
                   {['provisional', 'unconfirmed', 'differential'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '') && <button className="button" disabled={saving} onClick={() => void confirmCondition(condition)}>Xác nhận</button>}{' '}
-                  {condition.clinicalStatus?.coding?.[0]?.code === 'active' && <button className="button" disabled={saving} onClick={() => void resolveCondition(condition)}>Đã giải quyết</button>}
+                  {condition.clinicalStatus?.coding?.[0]?.code === 'active' && <details>
+                    <summary>Cập nhật trạng thái</summary>
+                    <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'resolved', event)}>
+                      <label>Lý do giải quyết<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Đánh dấu đã giải quyết</button>
+                    </form>
+                    <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'inactive', event)}>
+                      <label>Lý do tạm ngưng<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Tạm ngưng</button>
+                    </form>
+                  </details>}
+                  {condition.clinicalStatus?.coding?.[0]?.code === 'inactive' && <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'active', event)}>
+                    <label>Lý do tái hoạt<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
+                    <button className="button" disabled={saving}>Tái hoạt</button>
+                  </form>}
+                  {!['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '') && <details>
+                    <summary>Bác bỏ chẩn đoán</summary>
+                    <form className="editor" onSubmit={(event) => void refuteCondition(condition, event)}>
+                      <label>Lý do bác bỏ<textarea name="conditionRefutationReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Xác nhận bác bỏ</button>
+                    </form>
+                  </details>}
                 </td>}
               </tr>
             );
