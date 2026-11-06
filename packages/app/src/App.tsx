@@ -554,6 +554,16 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
       ]);
       let schedule = practitionerSchedules.find((item) => item.active !== false);
+      const existingSlots = schedule
+        ? await client.searchResources('Slot', { schedule: `Schedule/${schedule.id}`, _count: '1000' })
+        : [];
+      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots).filter(
+        ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
+      );
+      if (availableIntervals.length === 0) {
+        setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
+        return;
+      }
       if (!schedule) {
         schedule = await client.createResource<Schedule>({
           resourceType: 'Schedule',
@@ -561,17 +571,6 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           active: true,
           actor: [{ reference: practitionerReference }],
         });
-      }
-      const existingSlots = await client.searchResources('Slot', {
-        schedule: `Schedule/${schedule.id}`,
-        _count: '1000',
-      });
-      const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots).filter(
-        ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
-      );
-      if (availableIntervals.length === 0) {
-        setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
-        return;
       }
       await client.post('fhir/R4', {
         resourceType: 'Bundle',
