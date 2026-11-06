@@ -107,6 +107,30 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
+  async function finishEncounter(encounter: Encounter) {
+    if (!encounter.id || encounter.status !== 'in-progress') return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const end = new Date();
+      if (encounter.period?.start && end < new Date(encounter.period.start)) {
+        throw new Error('Thời điểm kết thúc không thể trước thời điểm bắt đầu.');
+      }
+      const updated = await client.updateResource<Encounter>({
+        ...encounter,
+        status: 'finished',
+        period: { ...encounter.period, end: end.toISOString() },
+      });
+      setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã kết thúc lần khám.');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createCondition(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -279,12 +303,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <h2>Lần khám</h2>
         {encounters.length ? (
           <div className="table-wrap"><table>
-            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th></tr></thead>
+            <thead><tr><th>Ngày</th><th>Trạng thái</th><th>Lý do</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
             <tbody>{encounters.map((encounter) => (
               <tr key={encounter.id}>
-                <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}</td>
+                <td>{encounter.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : '—'}{encounter.period?.end ? ` – ${new Date(encounter.period.end).toLocaleString('vi-VN')}` : ''}</td>
                 <td>{encounter.status}</td>
                 <td>{encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ') || '—'}</td>
+                {role !== 'Patient' && <td>{encounter.status === 'in-progress' && <button className="button" disabled={saving} onClick={() => void finishEncounter(encounter)}>Kết thúc</button>}</td>}
               </tr>
             ))}</tbody>
           </table></div>
