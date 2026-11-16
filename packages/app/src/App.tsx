@@ -192,6 +192,13 @@ function Forbidden() {
   );
 }
 
+interface RecurringSlotSeries {
+  id: string;
+  schedule: Schedule;
+  freeSlotCount: number;
+  nextStart: string;
+}
+
 function Dashboard({ role }: { role: HospitalRole }) {
   const client = useMedplum();
   const [stats, setStats] = useState<Record<string, number>>({});
@@ -315,21 +322,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [recurringSeriesIds, setRecurringSeriesIds] = useState<string[]>(() => {
-    try {
-      const stored = window.sessionStorage.getItem('smart-hospital.recurring-slot-series-list');
-      if (stored) {
-        const parsed: unknown = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) return parsed;
-        return [];
-      }
-      const previous = window.sessionStorage.getItem('smart-hospital.recurring-slot-series');
-      return previous ? [previous] : [];
-    } catch {
-      return [];
-    }
-  });
+  const [recurringSeries, setRecurringSeries] = useState<RecurringSlotSeries[]>([]);
   const [selectedRecurringSeriesId, setSelectedRecurringSeriesId] = useState<string>();
+  const [seriesPractitionerFilter, setSeriesPractitionerFilter] = useState('');
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const staff = role !== 'Patient';
@@ -387,6 +382,54 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       live = false;
     };
   }, [client, staff, refresh, selectedPatientService]);
+
+  useEffect(() => {
+    if (!staff) {
+      setRecurringSeries([]);
+      return;
+    }
+    let live = true;
+    const loadSeries = async (): Promise<void> => {
+      const now = new Date().toISOString();
+      const grouped = new Map<string, { schedule: Schedule; freeSlotCount: number; nextStart: string }>();
+      const allSchedules: Schedule[] = [];
+      for await (const page of client.searchResourcePages('Schedule', { _count: '100' })) allSchedules.push(...page);
+      const activeSchedules = allSchedules.filter((schedule): schedule is Schedule & { id: string } => schedule.active !== false && Boolean(schedule.id));
+      for (let index = 0; index < activeSchedules.length; index += 5) {
+        await Promise.all(activeSchedules.slice(index, index + 5).map(async (schedule) => {
+          for await (const page of client.searchResourcePages('Slot', {
+            schedule: `Schedule/${schedule.id}`,
+            status: 'free',
+            start: `ge${now}`,
+            _count: '100',
+            _sort: 'start',
+          })) {
+            for (const slot of page) {
+              const identifier = slot.identifier?.find((item) => item.system === RECURRING_SLOT_SERIES_SYSTEM)?.value;
+              if (!identifier || !slot.start) continue;
+              const current = grouped.get(identifier);
+              grouped.set(identifier, {
+                schedule,
+                freeSlotCount: (current?.freeSlotCount ?? 0) + 1,
+                nextStart: !current || slot.start < current.nextStart ? slot.start : current.nextStart,
+              });
+            }
+          }
+        }));
+      }
+      if (!live) return;
+      const summaries = [...grouped.entries()].map(([id, summary]) => ({ id, ...summary }))
+        .sort((left, right) => left.nextStart.localeCompare(right.nextStart));
+      setRecurringSeries(summaries);
+      setSelectedRecurringSeriesId((current) => summaries.some((series) => series.id === current) ? current : summaries[0]?.id);
+    };
+    void loadSeries().catch((e) => {
+      if (live) setError(e);
+    });
+    return () => {
+      live = false;
+    };
+  }, [client, staff, refresh]);
 
   async function createAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -794,9 +837,19 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const practitionerId = role === 'Doctor' ? profile.id : String(data.get('availabilityPractitioner'));
     const replaceSeries = data.has('replaceRecurringSeries');
-    const seriesIdToReplace = selectedRecurringSeriesId ?? recurringSeriesIds[0];
+    const seriesIdToReplace = selectedRecurringSeriesId && displayedRecurringSeries.some((series) => series.id === selectedRecurringSeriesId)
+      ? selectedRecurringSeriesId
+      : displayedRecurringSeries[0]?.id;
+    const selectedSeries = recurringSeries.find((series) => series.id === seriesIdToReplace);
+    const seriesPractitionerId = /^Practitioner\/([^/]+)$/.exec(
+      selectedSeries?.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference ?? ''
+    )?.[1];
+    const practitionerId = role === 'Doctor'
+      ? profile.id
+      : replaceSeries
+        ? seriesPractitionerId
+        : String(data.get('availabilityPractitioner'));
     const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
       startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
       endDate: new Date(`${String(data.get('recurringEndDate'))}T00:00:00`),
@@ -821,18 +874,20 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     setMessage('');
     try {
       const practitionerReference = `Practitioner/${practitionerId}`;
-      const [appointments, practitionerSchedules] = await Promise.all([
-        client.searchResources('Appointment', { actor: practitionerReference, _count: '1000' }),
-        client.searchResources('Schedule', { actor: practitionerReference, _count: '100' }),
-      ]);
-      const oldSeriesSlots = replaceSeries
-        ? await client.searchResources('Slot', {
-            identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${seriesIdToReplace}`,
-            status: 'free',
-            start: `ge${new Date().toISOString()}`,
-            _count: '100',
-          })
-        : [];
+      const appointments: Appointment[] = [];
+      const practitionerSchedules: Schedule[] = [];
+      for await (const page of client.searchResourcePages('Appointment', { actor: practitionerReference, _count: '100', _sort: 'date' })) appointments.push(...page);
+      for await (const page of client.searchResourcePages('Schedule', { actor: practitionerReference, _count: '100' })) practitionerSchedules.push(...page);
+      const oldSeriesSlots: Slot[] = [];
+      if (replaceSeries && selectedSeries?.schedule.id) {
+        for await (const page of client.searchResourcePages('Slot', {
+          schedule: `Schedule/${selectedSeries.schedule.id}`,
+          identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${seriesIdToReplace}`,
+          status: 'free',
+          start: `ge${new Date().toISOString()}`,
+          _count: '100',
+        })) oldSeriesSlots.push(...page);
+      }
       if (replaceSeries && oldSeriesSlots.length === 0) {
         setError(new Error('Series không còn Slot trống trong tương lai để thay đổi.'));
         return;
@@ -845,13 +900,14 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         setError(new Error('Series không thuộc bác sĩ đã chọn hoặc Schedule của series đã ngừng hoạt động.'));
         return;
       }
-      const existingSlots = (
-        await Promise.all(
-          activeSchedules.map((item) =>
-            client.searchResources('Slot', { schedule: `Schedule/${item.id}`, _count: '1000' })
-          )
-        )
-      ).flat();
+      const existingSlots: Slot[] = [];
+      for (let index = 0; index < activeSchedules.length; index += 5) {
+        await Promise.all(activeSchedules.slice(index, index + 5).map(async (item) => {
+          for await (const page of client.searchResourcePages('Slot', { schedule: `Schedule/${item.id}`, _count: '100' })) {
+            existingSlots.push(...page);
+          }
+        }));
+      }
       const oldSlotIds = new Set(oldSeriesSlots.map((slot) => slot.id).filter((id): id is string => Boolean(id)));
       const availableIntervals = removeIntervalsConflictingWithSlots(intervals, existingSlots, oldSlotIds).filter(
         ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
@@ -900,9 +956,6 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         type: 'transaction',
         entry: transactionEntries,
       });
-      const nextSeriesIds = [seriesId, ...recurringSeriesIds.filter((id) => id !== seriesId)].slice(0, 20);
-      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
-      setRecurringSeriesIds(nextSeriesIds);
       setSelectedRecurringSeriesId(seriesId);
       setMessage(
         `${replaceSeries ? 'Đã cập nhật' : 'Đã thêm'} ${availableIntervals.length} khung giờ; bỏ qua ${
@@ -919,22 +972,30 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   }
 
   async function cancelCreatedRecurringSeries() {
-    if (!selectedRecurringSeriesId || !window.confirm('Hủy các Slot trống trong tương lai của series đã chọn?')) return;
+    const seriesId = selectedRecurringSeriesId && displayedRecurringSeries.some((series) => series.id === selectedRecurringSeriesId)
+      ? selectedRecurringSeriesId
+      : displayedRecurringSeries[0]?.id;
+    if (!seriesId || !window.confirm('Hủy các Slot trống trong tương lai của series đã chọn?')) return;
     setBusy(true);
     setError(undefined);
     setMessage('');
     try {
-      const seriesSlots = await client.searchResources('Slot', {
-        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${selectedRecurringSeriesId}`,
+      const series = recurringSeries.find((item) => item.id === seriesId);
+      if (!series?.schedule.id) throw new Error('Không tìm thấy Schedule của series đã chọn.');
+      const seriesSlots: Slot[] = [];
+      for await (const page of client.searchResourcePages('Slot', {
+        schedule: `Schedule/${series.schedule.id}`,
+        identifier: `${RECURRING_SLOT_SERIES_SYSTEM}|${seriesId}`,
         status: 'free',
         start: `ge${new Date().toISOString()}`,
         _count: '100',
-      });
-      if (seriesSlots.length > 0) {
+      })) seriesSlots.push(...page);
+      for (let index = 0; index < seriesSlots.length; index += 100) {
+        const batch = seriesSlots.slice(index, index + 100);
         await client.post('fhir/R4', {
           resourceType: 'Bundle',
           type: 'transaction',
-          entry: seriesSlots.filter((slot) => slot.id).map((slot) => ({
+          entry: batch.filter((slot) => slot.id).map((slot) => ({
             resource: { ...slot, status: 'busy-unavailable' },
             request: {
               method: 'PUT',
@@ -945,11 +1006,6 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         });
       }
       setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
-      const nextSeriesIds = recurringSeriesIds.filter((id) => id !== selectedRecurringSeriesId);
-      window.sessionStorage.setItem('smart-hospital.recurring-slot-series-list', JSON.stringify(nextSeriesIds));
-      window.sessionStorage.removeItem('smart-hospital.recurring-slot-series');
-      setRecurringSeriesIds(nextSeriesIds);
-      setSelectedRecurringSeriesId(nextSeriesIds[0]);
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
@@ -1017,6 +1073,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     ({ practitionerReference }) =>
       practitioners.some((practitioner) => `Practitioner/${practitioner.id}` === practitionerReference && practitioner.active !== false)
   );
+  const displayedRecurringSeries = recurringSeries.filter((series) => {
+    const practitionerReference = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
+    return !seriesPractitionerFilter || practitionerReference === `Practitioner/${seriesPractitionerFilter}`;
+  });
   const displayedAppointments = staff
     ? [...appointments].sort((left, right) => {
         const leftWaiting = left.status === 'waitlist' && !left.start;
@@ -1226,7 +1286,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required /></label>
             <label>Giờ kết thúc<input name="recurringEndTime" type="time" required /></label>
             <label className="full-width">
-              <input name="replaceRecurringSeries" type="checkbox" disabled={recurringSeriesIds.length === 0} />
+              <input name="replaceRecurringSeries" type="checkbox" disabled={recurringSeries.length === 0} />
               {' '}Thay các Slot còn trống trong tương lai của series đã chọn
             </label>
             <fieldset className="full-width">
@@ -1240,15 +1300,28 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
               {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
             </button>
-            {recurringSeriesIds.length > 0 && (
+            {recurringSeries.length > 0 && (
               <>
+                {role === 'Admin' && <label>
+                  Шүүх эмчээр
+                  <select value={seriesPractitionerFilter} onChange={(event) => setSeriesPractitionerFilter(event.currentTarget.value)}>
+                    <option value="">Бүх эмч</option>
+                    {practitioners.map((practitioner) => <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}</option>)}
+                  </select>
+                </label>}
                 <label>
-                  Series gần đây
+                  Series còn Slot trống
                   <select
-                    value={selectedRecurringSeriesId ?? recurringSeriesIds[0]}
+                    value={selectedRecurringSeriesId ?? displayedRecurringSeries[0]?.id ?? ''}
                     onChange={(event) => setSelectedRecurringSeriesId(event.currentTarget.value)}
                   >
-                    {recurringSeriesIds.map((seriesId) => <option key={seriesId} value={seriesId}>{seriesId}</option>)}
+                    {displayedRecurringSeries.map((series) => {
+                      const practitionerRef = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
+                      const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerRef);
+                      return <option key={series.id} value={series.id}>{
+                        `${practitioner ? personName(practitioner) : practitionerRef ?? 'Bác sĩ'} · ${new Date(series.nextStart).toLocaleString('vi-VN')} · ${series.freeSlotCount} Slot`
+                      }</option>;
+                    })}
                   </select>
                 </label>
                 <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
