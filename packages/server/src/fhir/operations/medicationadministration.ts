@@ -45,7 +45,9 @@ export async function medicationAdministrationRecordHandler(req: FhirRequest): P
     return [badRequest('Medication administration status must be completed or not-done with a valid past or current time.')];
   }
   const statusReason = input.statusReason?.text?.trim();
-  if (input.status === 'not-done' && !statusReason) return [badRequest('A reason is required when medication was not administered.')];
+  if (input.status === 'not-done' && (!statusReason || statusReason.length > 500)) {
+    return [badRequest('A reason of 1–500 characters is required when medication was not administered.')];
+  }
   if (!input.medicationCodeableConcept?.text && !input.medicationCodeableConcept?.coding?.length && !input.medicationReference?.reference) {
     return [badRequest('A medication code or reference is required.')];
   }
