@@ -1074,7 +1074,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
 
   async function updateAllergyReview(
     allergy: AllergyIntolerance,
-    status: 'confirmed' | 'refuted' | 'inactive' | 'resolved',
+    status: 'confirmed' | 'refuted' | 'inactive' | 'resolved' | 'entered-in-error',
     reason: string
   ): Promise<AllergyIntolerance | undefined> {
     if (!allergy.id) return undefined;
@@ -2053,6 +2053,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'resolved')}>Đã hết</button>{' '}
                   <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'inactive')}>Ngừng theo dõi</button>
                 </>}
+                {allergy.verificationStatus?.coding?.[0]?.code !== 'entered-in-error' && <button className="button" disabled={saving} onClick={async () => {
+                  const reason = window.prompt('Lý do đánh dấu bản ghi dị ứng nhập nhầm?')?.trim();
+                  if (!reason) return;
+                  const updated = await updateAllergyReview(allergy, 'entered-in-error', reason);
+                  if (!updated) return;
+                  setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
+                  setMessage('Đã đánh dấu bản ghi dị ứng nhập nhầm và lưu lý do.');
+                }}>Đánh dấu nhập nhầm</button>}
               </td>}
             </tr>
           ))}</tbody>
