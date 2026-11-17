@@ -458,16 +458,21 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('observationEncounter') ?? '');
-      const observation = await client.createResource<Observation>({
-        resourceType: 'Observation',
-        status: 'final',
-        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category, display: observationCategoryLabels[category] ?? category }] }],
-        code: { text: code },
-        subject: { reference: `Patient/${patientId}` },
-        encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
-        effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
-        ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined } } : { valueString: textValue }),
+      const result = await client.post<Parameters>('fhir/R4/Observation/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource: {
+          resourceType: 'Observation',
+          status: 'final',
+          category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category, display: observationCategoryLabels[category] ?? category }] }],
+          code: { text: code },
+          subject: { reference: `Patient/${patientId}` },
+          encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+          effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
+          ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined } } : { valueString: textValue }),
+        } }],
       });
+      const observation = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!observation) throw new Error('Server did not return the recorded Observation.');
       setObservations((current) => [observation, ...current]);
       setMessage('Đã lưu kết quả.');
       form.reset();
@@ -539,11 +544,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      await client.post('fhir/R4', {
-        resourceType: 'Bundle',
-        type: 'transaction',
-        entry: observations.map((observation) => ({ resource: observation, request: { method: 'POST', url: 'Observation' } })),
+      const result = await client.post<Parameters>('fhir/R4/Observation/$record', {
+        resourceType: 'Parameters',
+        parameter: observations.map((observation) => ({ name: 'resource', resource: observation })),
       });
+      const created = result.parameter?.filter((item) => item.name === 'return').map((item) => item.resource as Observation) ?? [];
+      if (created.length !== observations.length) throw new Error('Server did not return every recorded Observation.');
       const latest: Observation[] = [];
       for await (const page of client.searchResourcePages('Observation', { patient: `Patient/${patientId}`, _count: '100', _sort: '-date' })) latest.push(...page);
       setObservations(latest);
@@ -586,25 +592,30 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Observation>({
-        ...observation,
-        status: 'amended',
-        code: isBloodPressure ? observation.code : { text: code },
-        effectiveDateTime: new Date(dateTime).toISOString(),
-        ...(isBloodPressure ? {
-          component: observation.component?.map((component) => {
-            const coding = component.code.coding?.[0];
-            if (coding?.code === '8480-6') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(systolicValue) } };
-            if (coding?.code === '8462-4') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(diastolicValue) } };
-            return component;
-          }),
-        } : numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
-        note: [...(observation.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Kết quả được sửa: ${previousValue} → ${nextValue}. Lý do: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Observation/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'observation', valueReference: { reference: `Observation/${observation.id}` } },
+          { name: 'action', valueCode: 'amend' },
+          { name: 'reason', valueString: reason },
+          { name: 'resource', resource: {
+            ...observation,
+            status: 'amended',
+            code: isBloodPressure ? observation.code : { text: code },
+            effectiveDateTime: new Date(dateTime).toISOString(),
+            ...(isBloodPressure ? {
+              component: observation.component?.map((component) => {
+                const coding = component.code.coding?.[0];
+                if (coding?.code === '8480-6') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(systolicValue) } };
+                if (coding?.code === '8462-4') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(diastolicValue) } };
+                return component;
+              }),
+            } : numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
+          } },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!updated) throw new Error('Server did not return the amended Observation.');
       setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã sửa kết quả và lưu lý do vào ghi chú audit.');
       form.reset();
@@ -632,15 +643,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Observation>({
-        ...observation,
-        status: 'entered-in-error',
-        note: [...(observation.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Kết quả được đánh dấu nhập nhầm; dữ liệu gốc được giữ để truy vết. Lý do: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Observation/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'observation', valueReference: { reference: `Observation/${observation.id}` } },
+          { name: 'action', valueCode: 'entered-in-error' },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!updated) throw new Error('Server did not return the updated Observation.');
       setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã đánh dấu kết quả nhập nhầm và lưu lý do.');
       form.reset();

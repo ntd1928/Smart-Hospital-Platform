@@ -18,6 +18,7 @@ import {
 } from './operations/appointments';
 import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
 import { conditionRecordHandler, conditionReviewHandler } from './operations/condition';
+import { observationRecordHandler, observationUpdateHandler } from './operations/observation';
 import { encounterAddNoteHandler, encounterCancelHandler, encounterCompleteHandler, encounterRecordHandler, encounterUpdateDetailsHandler } from './operations/encounters';
 import { medicationStatementRecordHandler, medicationStatementUpdateStatusHandler } from './operations/medicationstatement';
 import { medicationRequestRecordHandler, medicationRequestUpdateStatusHandler } from './operations/medicationrequest';
@@ -92,6 +93,8 @@ router.add('POST', '/Encounter/$add-note', encounterAddNoteHandler);
 router.add('POST', '/Encounter/$cancel', encounterCancelHandler);
 router.add('POST', '/Condition/$record', conditionRecordHandler);
 router.add('POST', '/Condition/$review', conditionReviewHandler);
+router.add('POST', '/Observation/$record', observationRecordHandler);
+router.add('POST', '/Observation/$update', observationUpdateHandler);
 router.add('POST', '/MedicationStatement/$record', medicationStatementRecordHandler);
 router.add('POST', '/MedicationStatement/$update-status', medicationStatementUpdateStatusHandler);
 router.add('POST', '/MedicationRequest/$record', medicationRequestRecordHandler);

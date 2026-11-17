@@ -163,13 +163,13 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   // This includes ensuring no admin rights for non-admins
   // and restricted access for admins
   accessPolicy = applyProjectAdminAccessPolicy(project, membership, accessPolicy);
-  accessPolicy = restrictConditionWrites(accessPolicy);
+  accessPolicy = restrictClinicalWrites(accessPolicy);
 
   return accessPolicy;
 }
 
-/** Keeps Condition create/update/delete behind audited lifecycle operations for every project user. */
-function restrictConditionWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
+/** Keeps Condition and Observation writes behind audited lifecycle operations for every project user. */
+function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
   const resourcePolicies: AccessPolicyResource[] = [];
   for (const rule of accessPolicy.resource) {
     const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
@@ -179,7 +179,7 @@ function restrictConditionWrites(accessPolicy: PopulatedAccessPolicy): Populated
         resourceType,
         criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
       };
-      if (resourceType === 'Condition') {
+      if (resourceType === 'Condition' || resourceType === 'Observation') {
         const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
         scopedRule.readonly = true;
         scopedRule.interaction = interactions.filter((interaction) => !['create', 'update', 'delete'].includes(interaction));
@@ -229,7 +229,7 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       };
       if (scopedSearchParameters) {
         scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
-        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance' || resourceType === 'Condition') {
+        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance' || resourceType === 'Condition' || resourceType === 'Observation') {
           scopedRule.readonly = true;
           const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
           scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');
@@ -269,7 +269,7 @@ function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, p
     const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
     for (const resourceType of resourceTypes) {
       if (resourceType !== 'Patient') {
-        const readonlyClinicalResources = ['AllergyIntolerance', 'Condition', 'MedicationRequest', 'MedicationStatement'];
+        const readonlyClinicalResources = ['AllergyIntolerance', 'Condition', 'MedicationRequest', 'MedicationStatement', 'Observation'];
         resourcePolicies.push({
           ...rule,
           resourceType,
