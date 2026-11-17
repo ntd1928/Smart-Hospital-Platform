@@ -28,6 +28,7 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - AllergyIntolerance create/review chuyển sang operation server-side có assignment check, lock và audit reason; policy chặn Practitioner ghi trực tiếp.
 - Waitlist Appointment hỗ trợ khoảng ngày mong muốn theo timezone IANA của Patient; cập nhật request cùng dịch vụ idempotent, lọc Slot phía staff và kiểm tra lại preference trong operation server-side.
 - Staff Appointment cancellation chuyển từ transaction do client dựng sang operation server-side có role/assignment check, lý do bắt buộc, khóa theo Appointment và cập nhật Slot nguyên tử.
+- Recurring Slot rule lưu timezone IANA và tạo interval theo giờ địa phương của zone đó thay vì timezone hiện tại của trình duyệt; giờ địa phương không tồn tại khi chuyển DST bị bỏ qua.
 - Series lịch lặp được lưu bằng nested FHIR Extension trên Schedule, hiển thị và chỉnh sửa cả khi không còn Slot trống; thay quy tắc cùng các Slot tương lai bằng transaction có giới hạn, hủy rule theo batch và giữ Slot đã đặt.
 - Recurring Slot series được phát hiện lại từ identifier đã lưu trên FHIR Slot và Schedule, thay danh sách 20 series trong sessionStorage; staff tra cứu, thay hoặc ngừng Slot trống tương lai sau khi đăng nhập lại.
 

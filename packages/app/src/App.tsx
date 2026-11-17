@@ -202,6 +202,7 @@ interface RecurringSlotSeries {
   startTime: string;
   endTime: string;
   weekdays: number[];
+  timeZone: string;
 }
 
 const RECURRING_SLOT_RULE_URL = `${RECURRING_SLOT_SERIES_SYSTEM}/rule`;
@@ -241,8 +242,9 @@ function readRecurringSlotRules(schedule: Schedule): RecurringSlotSeries[] {
     const endDate = children.find((child) => child.url === 'end-date')?.valueDate;
     const startTime = children.find((child) => child.url === 'start-time')?.valueTime;
     const endTime = children.find((child) => child.url === 'end-time')?.valueTime;
+    const timeZone = value('time-zone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
     if (!id || !startDate || !endDate || !startTime || !endTime || weekdays.length === 0) return [];
-    return [{ id, schedule, freeSlotCount: 0, startDate, endDate, startTime, endTime, weekdays }];
+    return [{ id, schedule, freeSlotCount: 0, startDate, endDate, startTime, endTime, weekdays, timeZone }];
   });
 }
 
@@ -255,6 +257,7 @@ function toRecurringSlotRuleExtension(rule: RecurringSlotSeries): NonNullable<Sc
       { url: 'end-date', valueDate: rule.endDate },
       { url: 'start-time', valueTime: rule.startTime },
       { url: 'end-time', valueTime: rule.endTime },
+      { url: 'time-zone', valueString: rule.timeZone },
       ...rule.weekdays.map((weekday) => ({ url: 'weekday', valueInteger: weekday })),
     ],
   };
@@ -916,6 +919,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     const replaceSeries = data.has('replaceRecurringSeries');
     const seriesIdToReplace = selectedRecurringSeries?.id;
     const selectedSeries = recurringSeries.find((series) => series.id === seriesIdToReplace);
+    const recurrenceTimeZone = replaceSeries
+      ? selectedSeries?.timeZone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
     const seriesPractitionerId = /^Practitioner\/([^/]+)$/.exec(
       selectedSeries?.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference ?? ''
     )?.[1];
@@ -924,12 +930,17 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       : role === 'Doctor'
         ? profile.id
         : String(data.get('availabilityPractitioner'));
+    if (!recurrenceTimeZone) {
+      setError(new Error('Không xác định được múi giờ để tạo lịch lặp.'));
+      return;
+    }
     const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
       startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
       endDate: new Date(`${String(data.get('recurringEndDate'))}T00:00:00`),
       startTime: String(data.get('recurringStartTime')),
       endTime: String(data.get('recurringEndTime')),
       weekdays: data.getAll('recurringWeekday').map(Number),
+      timeZone: recurrenceTimeZone,
     })).filter(({ start }) => start > new Date());
     if (!practitionerId || intervals.length === 0 || data.getAll('recurringWeekday').length === 0) {
       setError(new Error('Chọn các ngày và khoảng thời gian tương lai hợp lệ để tạo lịch.'));
@@ -1003,6 +1014,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         startTime: String(data.get('recurringStartTime')),
         endTime: String(data.get('recurringEndTime')),
         weekdays: data.getAll('recurringWeekday').map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+        timeZone: recurrenceTimeZone,
       };
       const existingRules = (schedule.extension ?? []).filter((extension) =>
         !(extension.url === RECURRING_SLOT_RULE_URL && extension.extension?.some((item) => item.url === 'series-id' && item.valueString === seriesId))
@@ -1387,7 +1399,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       {staff && (
         <form key={`${selectedRecurringSeries?.id ?? 'new'}:${editRecurringSeries}`} className="panel editor" onSubmit={createRecurringAvailability}>
           <h2>{editRecurringSeries ? 'Chỉnh sửa quy tắc lịch lặp' : 'Tạo khung giờ lặp'}</h2>
-          <p className="muted">Quy tắc được lưu trên Schedule và vẫn có thể chỉnh sửa khi không còn Slot trống. Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
+          <p className="muted">Ngày và giờ được diễn giải theo {editRecurringSeries ? selectedRecurringSeries?.timeZone : (Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC')}. Quy tắc được lưu trên Schedule và vẫn có thể chỉnh sửa khi không còn Slot trống. Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
@@ -1439,8 +1451,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                     {displayedRecurringSeries.map((series) => {
                       const practitionerRef = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
                       const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerRef);
+                      const nextStart = series.nextStart
+                        ? new Intl.DateTimeFormat('vi-VN', { dateStyle: 'short', timeStyle: 'short', timeZone: series.timeZone }).format(new Date(series.nextStart))
+                        : `${series.startDate} ${series.startTime}`;
                       return <option key={series.id} value={series.id}>{
-                        `${practitioner ? personName(practitioner) : practitionerRef ?? 'Bác sĩ'} · ${series.nextStart ? new Date(series.nextStart).toLocaleString('vi-VN') : `${series.startDate} ${series.startTime}`} · ${series.freeSlotCount} Slot trống`
+                        `${practitioner ? personName(practitioner) : practitionerRef ?? 'Bác sĩ'} · ${nextStart} · ${series.timeZone} · ${series.freeSlotCount} Slot trống`
                       }</option>;
                     })}
                   </select>
