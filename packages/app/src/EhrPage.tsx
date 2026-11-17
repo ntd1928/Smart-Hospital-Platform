@@ -1226,7 +1226,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     !['refuted', 'entered-in-error'].includes(allergy.verificationStatus?.coding?.[0]?.code ?? '')
   );
   const activeMedicationAllergies = activeAllergies.filter((allergy) => allergy.category?.includes('medication'));
-  const latestObservation = observations
+  const validObservations = observations.filter((observation) => observation.status !== 'entered-in-error');
+  const activeMedicationRequests = medicationRequests.filter((request) => request.status === 'active');
+  const latestObservation = validObservations
     .slice()
     .sort((a, b) => (b.effectiveDateTime ?? '').localeCompare(a.effectiveDateTime ?? ''))[0];
   const query = encounterSearch.trim().toLocaleLowerCase();
@@ -1331,10 +1333,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         {medicationStatements.filter((statement) => statement.status === 'active').length
           ? <ul>{medicationStatements.filter((statement) => statement.status === 'active').map((statement) => <li key={statement.id}>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul>
           : <p>Chưa có đối soát thuốc đang dùng.</p>}
-        {medicationRequests.some((request) => request.status === 'active') && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{medicationRequests.filter((request) => request.status === 'active').map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
+        {activeMedicationRequests.length > 0 && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{activeMedicationRequests.map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
         <h2>Kết quả gần đây</h2>
-        {observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).length
-          ? <ul>{observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {formatObservationValue(observation)} · {observation.status}</li>)}</ul>
+        {validObservations.slice(0, 10).length
+          ? <ul>{validObservations.slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {formatObservationValue(observation)} · {observation.status}</li>)}</ul>
           : <p>Chưa ghi nhận.</p>}
         <h2>Lần khám gần đây</h2>
         {encounters.slice(0, 10).length
@@ -1383,7 +1385,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {patientId && <div className="stat-grid">
         <section className="stat-card"><span>Lần khám</span><strong>{encounters.length}</strong><small>{inProgressEncounterCount} đang diễn ra</small></section>
         <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
-        <section className="stat-card"><span>Kết quả hợp lệ</span><strong>{observations.filter((observation) => observation.status !== 'entered-in-error').length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
+        <section className="stat-card"><span>Kết quả hợp lệ</span><strong>{validObservations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
       </div>}
       {patientId && !loading && <section className={`notice ${ehrConsistencyFindings.length ? 'error' : ''}`} aria-live="polite">
         <strong>Rà soát liên kết hồ sơ:</strong>{' '}
