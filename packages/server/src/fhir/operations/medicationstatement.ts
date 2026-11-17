@@ -76,7 +76,11 @@ export async function medicationStatementRecordHandler(req: FhirRequest): Promis
         ? { reference: `Patient/${patientId}` }
         : { reference: `Practitioner/${practitionerId}` },
       dateAsserted: now,
-      note: [...(input.note ?? []), {
+      note: [...(input.note ?? []).map((note) => ({
+        ...note,
+        time: now,
+        authorReference: practitionerId ? { reference: `Practitioner/${practitionerId}` } : undefined,
+      })), {
         time: now,
         text: `Đối soát thuốc được ghi nhận bởi ${practitionerId ? `Practitioner/${practitionerId}` : 'Project Admin'}.`,
         authorReference: practitionerId ? { reference: `Practitioner/${practitionerId}` } : undefined,

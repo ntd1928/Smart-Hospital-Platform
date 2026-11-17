@@ -75,6 +75,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [medicationStatusFilter, setMedicationStatusFilter] = useState('');
   const [medicationFrom, setMedicationFrom] = useState('');
   const [medicationTo, setMedicationTo] = useState('');
+  const [statementSearch, setStatementSearch] = useState('');
+  const [statementStatusFilter, setStatementStatusFilter] = useState('');
+  const [statementFrom, setStatementFrom] = useState('');
+  const [statementTo, setStatementTo] = useState('');
   const [administrationSearch, setAdministrationSearch] = useState('');
   const [administrationStatusFilter, setAdministrationStatusFilter] = useState('');
   const [administrationFrom, setAdministrationFrom] = useState('');
@@ -860,7 +864,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       setError(new Error('Chọn bệnh nhân, thuốc, cách dùng và ngày hợp lệ.'));
       return;
     }
-    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken' && statusInput !== 'entered-in-error') {
+    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken') {
       setError(new Error('Trạng thái thuốc đang dùng không hợp lệ.'));
       return;
     }
@@ -1333,6 +1337,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!medicationFrom || (authoredDate && authoredDate >= medicationFrom))
       && (!medicationTo || (authoredDate && authoredDate <= medicationTo));
   });
+  const statementQuery = statementSearch.trim().toLocaleLowerCase();
+  const filteredMedicationStatements = medicationStatements.filter((statement) => {
+    const medicationName = statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '';
+    const effectiveDate = statement.effectiveDateTime?.slice(0, 10) ?? statement.effectivePeriod?.start?.slice(0, 10) ?? statement.dateAsserted?.slice(0, 10) ?? '';
+    const searchableText = [medicationName, statement.dosage?.map((dose) => dose.text).join(' '), statement.statusReason?.map((reason) => reason.text).join(' '), statement.note?.map((note) => note.text).join(' ')].join(' ').toLocaleLowerCase();
+    return (!statementQuery || searchableText.includes(statementQuery))
+      && (!statementStatusFilter || statement.status === statementStatusFilter)
+      && (!statementFrom || (effectiveDate && effectiveDate >= statementFrom))
+      && (!statementTo || (effectiveDate && effectiveDate <= statementTo));
+  });
   const administrationQuery = administrationSearch.trim().toLocaleLowerCase();
   const filteredMedicationAdministrations = medicationAdministrations.filter((administration) => {
     const requestId = /^MedicationRequest\/([^/]+)$/.exec(administration.request?.reference ?? '')?.[1];
@@ -1376,6 +1390,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMedicationStatusFilter('');
     setMedicationFrom('');
     setMedicationTo('');
+    setStatementSearch('');
+    setStatementStatusFilter('');
+    setStatementFrom('');
+    setStatementTo('');
     setError(undefined);
     setMessage('');
     setLoading(Boolean(nextPatientId));
@@ -1990,9 +2008,27 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Thuốc đang dùng và tiền sử dùng</h2>
-        {medicationStatements.length ? <div className="table-wrap"><table>
+        <div className="form-grid">
+          <label className="full-width">Tìm thuốc, cách dùng hoặc ghi chú
+            <input value={statementSearch} onChange={(event) => setStatementSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái
+            <select value={statementStatusFilter} onChange={(event) => setStatementStatusFilter(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="active">Đang dùng</option>
+              <option value="on-hold">Tạm ngưng</option>
+              <option value="not-taken">Không dùng</option>
+              <option value="stopped">Đã ngừng</option>
+              <option value="completed">Đã hoàn tất</option>
+              <option value="entered-in-error">Nhập nhầm</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={statementFrom} onChange={(event) => setStatementFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={statementTo} onChange={(event) => setStatementTo(event.currentTarget.value)} /></label>
+        </div>
+        {filteredMedicationStatements.length ? <div className="table-wrap"><table>
           <thead><tr><th>Ngày xác nhận</th><th>Nguồn</th><th>Thuốc</th><th>Cách dùng</th><th>Trạng thái</th><th>Lý do</th><th>Đơn kê</th><th>Lần khám</th><th>Ghi chú audit</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
-          <tbody>{medicationStatements.map((statement) => {
+          <tbody>{filteredMedicationStatements.map((statement) => {
             const encounter = encounters.find((item) => statement.context?.reference === `Encounter/${item.id}`);
             const basedOnRequest = medicationRequests.find((request) => statement.basedOn?.some((reference) => reference.reference === `MedicationRequest/${request.id}`));
             const sourceLabel = statement.informationSource?.reference === `Patient/${patientId}` ? 'Bệnh nhân báo' : statement.informationSource?.display ?? statement.informationSource?.reference ?? '—';
@@ -2035,7 +2071,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có bản ghi đối soát thuốc trong phạm vi truy cập.</p>}
+        </table></div> : <p className="empty">{medicationStatements.length ? 'Không có bản ghi đối soát thuốc phù hợp với bộ lọc.' : 'Chưa có bản ghi đối soát thuốc trong phạm vi truy cập.'}</p>}
       </section>
       <section className="panel">
         <h2>Đơn thuốc</h2>
