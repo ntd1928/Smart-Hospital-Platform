@@ -1188,21 +1188,47 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).length;
   const ehrConsistencyFindings: string[] = [];
   const encounterIds = new Set(encounters.map((item) => item.id).filter(Boolean));
+  const encounterById = new Map(encounters.filter((item) => item.id).map((item) => [item.id as string, item]));
   const appointmentById = new Map(appointments.filter((item) => item.id).map((item) => [item.id as string, item]));
   const medicationRequestIds = new Set(medicationRequests.map((item) => item.id).filter(Boolean));
+  const medicationRequestById = new Map(medicationRequests.filter((item) => item.id).map((item) => [item.id as string, item]));
+  const expectedPatientReference = `Patient/${patientId}`;
+  const checkPatientReference = (resourceType: string, resourceId: string | undefined, reference: string | undefined): void => {
+    if (reference && reference !== expectedPatientReference) {
+      ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Patient ${reference} không khớp hồ sơ đang xem.`);
+    }
+  };
+  for (const encounter of encounters) checkPatientReference('Encounter', encounter.id, encounter.subject?.reference);
+  for (const condition of conditions) checkPatientReference('Condition', condition.id, condition.subject?.reference);
+  for (const observation of observations) checkPatientReference('Observation', observation.id, observation.subject?.reference);
+  for (const request of medicationRequests) checkPatientReference('MedicationRequest', request.id, request.subject?.reference);
+  for (const statement of medicationStatements) checkPatientReference('MedicationStatement', statement.id, statement.subject?.reference);
+  for (const administration of medicationAdministrations) checkPatientReference('MedicationAdministration', administration.id, administration.subject?.reference);
+  for (const allergy of allergies) checkPatientReference('AllergyIntolerance', allergy.id, allergy.patient?.reference);
   for (const encounter of encounters) {
     for (const reference of encounter.appointment ?? []) {
       const match = /^Appointment\/([^/]+)$/.exec(reference.reference ?? '');
       if (!match) continue;
       const appointment = appointmentById.get(match[1]);
       if (!appointment) ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} chưa có trong hồ sơ được tải.`);
-      else if (appointment.status !== 'fulfilled') ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} đang ở trạng thái ${appointment.status}, không phải fulfilled.`);
+      else {
+        if (appointment.status !== 'fulfilled') ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} đang ở trạng thái ${appointment.status}, không phải fulfilled.`);
+        if (!appointment.participant?.some((participant) => participant.actor?.reference === expectedPatientReference)) {
+          ehrConsistencyFindings.push(`Encounter ${encounter.id}: Patient của Appointment ${match[1]} không khớp hồ sơ đang xem.`);
+        }
+        if (encounter.subject?.reference !== appointment.participant?.find((participant) => participant.actor?.reference?.startsWith('Patient/'))?.actor?.reference) {
+          ehrConsistencyFindings.push(`Encounter ${encounter.id}: Patient không khớp Patient của Appointment ${match[1]}.`);
+        }
+      }
     }
   }
   const checkEncounterReference = (resourceType: string, resourceId: string | undefined, reference: string | undefined): void => {
     if (!reference) return;
     const match = /^Encounter\/([^/]+)$/.exec(reference);
-    if (match && !encounterIds.has(match[1])) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} chưa có trong hồ sơ được tải.`);
+    if (!match) return;
+    const encounter = encounterById.get(match[1]);
+    if (!encounterIds.has(match[1])) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} chưa có trong hồ sơ được tải.`);
+    else if (encounter?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} thuộc Patient khác.`);
   };
   for (const condition of conditions) checkEncounterReference('Condition', condition.id, condition.encounter?.reference);
   for (const observation of observations) checkEncounterReference('Observation', observation.id, observation.encounter?.reference);
@@ -1212,6 +1238,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     for (const reference of statement.basedOn ?? []) {
       const match = /^MedicationRequest\/([^/]+)$/.exec(reference.reference ?? '');
       if (match && !medicationRequestIds.has(match[1])) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+      else if (match) {
+        const request = medicationRequestById.get(match[1]);
+        if (request?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} thuộc Patient khác.`);
+        if (request?.status === 'entered-in-error') ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: liên kết tới MedicationRequest ${match[1]} đã được đánh dấu nhập nhầm.`);
+      }
     }
   }
   for (const administration of medicationAdministrations) {
@@ -1219,6 +1250,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const match = /^MedicationRequest\/([^/]+)$/.exec(administration.request?.reference ?? '');
     if (match && !medicationRequestIds.has(match[1])) {
       ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+    } else if (match) {
+      const request = medicationRequestById.get(match[1]);
+      if (request?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: MedicationRequest ${match[1]} thuộc Patient khác.`);
+      if (request?.status === 'entered-in-error') ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: liên kết tới MedicationRequest ${match[1]} đã được đánh dấu nhập nhầm.`);
     }
   }
   const activeAllergies = allergies.filter((allergy) =>
@@ -1390,9 +1425,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {patientId && !loading && <section className={`notice ${ehrConsistencyFindings.length ? 'error' : ''}`} aria-live="polite">
         <strong>Rà soát liên kết hồ sơ:</strong>{' '}
         {ehrConsistencyFindings.length
-          ? <><span>{ehrConsistencyFindings.length} điểm cần kiểm tra. Tham chiếu chưa tải có thể nằm ngoài quyền truy cập hiện tại.</span><ul>{ehrConsistencyFindings.map((finding, index) => <li key={`${finding}-${index}`}>{finding}</li>)}</ul></>
-          : <span>Không phát hiện tham chiếu Encounter/Appointment/MedicationRequest chưa khớp trong dữ liệu đã tải.</span>}
-        <small>Đây là rà soát liên kết dữ liệu, không xác nhận tính đúng đắn lâm sàng.</small>
+          ? <><span>{ehrConsistencyFindings.length} liên kết hoặc trạng thái cần kiểm tra. Tham chiếu chưa tải có thể nằm ngoài quyền truy cập hiện tại.</span><ul>{ehrConsistencyFindings.map((finding, index) => <li key={`${finding}-${index}`}>{finding}</li>)}</ul></>
+          : <span>Không phát hiện Patient hoặc liên kết Encounter/Appointment/MedicationRequest không khớp trong dữ liệu đã tải.</span>}
+        <small>Đây là rà soát tính nhất quán dữ liệu và trạng thái, không xác nhận tính đúng đắn lâm sàng.</small>
       </section>}
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createEncounter}>
