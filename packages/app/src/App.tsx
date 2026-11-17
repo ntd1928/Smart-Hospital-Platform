@@ -574,8 +574,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     }
   }
 
-  async function cancelAppointment(appointment: Appointment) {
-    if (!appointment.id || !window.confirm('Hủy lịch hẹn này?')) return;
+  async function cancelAppointment(appointment: Appointment, reason?: string) {
+    if (!appointment.id || (!staff && !window.confirm('Hủy lịch hẹn này?'))) return;
+    if (staff && !reason?.trim()) {
+      setError(new Error('Nhập lý do hủy lịch.'));
+      return;
+    }
+    setBusy(true);
     setError(undefined);
     setMessage('');
     try {
@@ -588,36 +593,27 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         setRefresh((value) => value + 1);
         return;
       }
-      const entries: Array<Record<string, unknown>> = [
-        {
-          resource: { ...appointment, status: 'cancelled' },
-          request: {
-            method: 'PUT',
-            url: `Appointment/${appointment.id}`,
-            ifMatch: appointment.meta?.versionId ? `W/"${appointment.meta.versionId}"` : undefined,
-          },
-        },
-      ];
-      const slotReference = appointment.slot?.[0]?.reference;
-      if (slotReference?.startsWith('Slot/')) {
-        const slot = await client.readResource<Slot>('Slot', slotReference.slice('Slot/'.length));
-        if (slot.status === 'busy' && slot.id) {
-          entries.push({
-            resource: { ...slot, status: 'free' },
-            request: {
-              method: 'PUT',
-              url: `Slot/${slot.id}`,
-              ifMatch: slot.meta?.versionId ? `W/"${slot.meta.versionId}"` : undefined,
-            },
-          });
-        }
-      }
-      await client.post('fhir/R4', { resourceType: 'Bundle', type: 'transaction', entry: entries });
-      setMessage('Đã hủy lịch hẹn.');
+      await client.post('fhir/R4/Appointment/$staff-cancel', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'appointment', valueReference: { reference: `Appointment/${appointment.id}` } },
+          { name: 'reason', valueString: reason!.trim() },
+        ],
+      });
+      setMessage('Đã hủy lịch và lưu lý do vào lịch sử Appointment.');
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
+      setRefresh((value) => value + 1);
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function submitStaffCancellation(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    await cancelAppointment(appointment, String(new FormData(form).get('staffCancellationReason') ?? ''));
   }
 
   async function rescheduleAppointment(appointment: Appointment, event: FormEvent<HTMLFormElement>) {
@@ -1533,6 +1529,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                     : undefined;
                   const canCancel =
                     (!staff && appointment.status === 'waitlist' && !appointment.start) ||
+                    (staff && role === 'Admin' && isUnscheduledWaitlist) ||
                     (['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
                       !!appointment.start && new Date(appointment.start) > new Date());
                   const canRecordOutcome =
@@ -1612,10 +1609,21 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                               </form>
                             </details>
                           )}
-                          {canCancel && (
-                            <button className="button secondary" onClick={() => void cancelAppointment(appointment)}>
-                              {patientProfile ? 'Hủy lịch của tôi' : 'Hủy'}
+                          {canCancel && !staff && (
+                            <button className="button secondary" disabled={busy} onClick={() => void cancelAppointment(appointment)}>
+                              Hủy lịch của tôi
                             </button>
+                          )}
+                          {canCancel && staff && (
+                            <details>
+                              <summary>Hủy lịch</summary>
+                              <form className="editor" onSubmit={(event) => void submitStaffCancellation(appointment, event)}>
+                                <label>Lý do hủy (bắt buộc)
+                                  <textarea name="staffCancellationReason" required maxLength={500} rows={2} />
+                                </label>
+                                <button className="button secondary" disabled={busy}>{busy ? 'Đang hủy…' : 'Xác nhận hủy'}</button>
+                              </form>
+                            </details>
                           )}
                           {!staff && canCancel && !isUnscheduledWaitlist && (
                             <details>

@@ -12,6 +12,7 @@ import {
   appointmentOfferWaitlistHandler,
   appointmentRecordOutcomeHandler,
   appointmentRescheduleHandler,
+  appointmentStaffCancelHandler,
   appointmentStartEncounterHandler,
   appointmentWaitlistHandler,
 } from './operations/appointments';
@@ -91,6 +92,7 @@ router.add('POST', '/MedicationRequest/$update-status', medicationRequestUpdateS
 router.add('POST', '/AllergyIntolerance/$record', allergyIntoleranceRecordHandler);
 router.add('POST', '/AllergyIntolerance/$review', allergyIntoleranceReviewHandler);
 router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);
+router.add('POST', '/Appointment/$staff-cancel', appointmentStaffCancelHandler);
 router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
 router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);

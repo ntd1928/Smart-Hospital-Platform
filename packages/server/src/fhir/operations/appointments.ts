@@ -54,6 +54,19 @@ const cancelOperation = makeOperationDefinition(
   }
 );
 
+const staffCancelOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-staff-cancel',
+    code: 'staff-cancel',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'reason', 'string', 1, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 const rescheduleOperation = makeOperationDefinition(
   { scope: 'type', resource: 'Appointment' },
   {
@@ -147,6 +160,11 @@ interface AvailabilityParameters {
 
 interface CancelParameters {
   appointment: Reference;
+}
+
+interface StaffCancelParameters {
+  appointment: Reference;
+  reason: string;
 }
 
 interface RescheduleParameters {
@@ -784,6 +802,62 @@ export async function appointmentCancelHandler(req: FhirRequest): Promise<FhirRe
   );
 
   return [allOk, buildOutputParameters(cancelOperation, { return: appointment })];
+}
+
+/** Cancels a future Appointment for authorized staff and releases its Slot atomically with an audit reason. */
+export async function appointmentStaffCancelHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!ctx.membership.admin && !practitionerId) throw new OperationOutcomeError(forbidden('Only authenticated staff may cancel an Appointment.'));
+  const params = parseInputParameters<StaffCancelParameters>(staffCancelOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  const reason = params.reason.trim();
+  if (!appointmentId) return [badRequest('An Appointment reference is required.')];
+  if (!reason || reason.length > 500) return [badRequest('Cancellation reason is required and must be 500 characters or fewer.')];
+  if (practitionerId && !ctx.membership.admin) {
+    const practitioner = await ctx.systemRepo.readResource<Practitioner>('Practitioner', practitionerId);
+    if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false) {
+      throw new OperationOutcomeError(forbidden('Inactive or out-of-project Practitioners cannot cancel Appointments.'));
+    }
+  }
+
+  const appointment = await ctx.repo.ensureInTransaction(async (txRepo) => {
+    await txRepo.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${ctx.project.id}:Appointment:cancel:${appointmentId}`],
+      { resourceTypes: ['Appointment'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.staffCancelLock' }
+    );
+    const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+    if (current.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Appointment belongs to another project.'));
+    if (!['proposed', 'pending', 'booked', 'waitlist'].includes(current.status ?? '')) {
+      throw new OperationOutcomeError(conflict('Only an active Appointment can be cancelled.'));
+    }
+    const unscheduledWaitlist = current.status === 'waitlist' && !current.start && !current.slot?.length;
+    const startsAt = current.start ? new Date(current.start).getTime() : Number.NaN;
+    if (!unscheduledWaitlist && (!Number.isFinite(startsAt) || startsAt <= Date.now())) {
+      throw new OperationOutcomeError(conflict('Only future scheduled Appointments can be cancelled.'));
+    }
+    if (practitionerId && !ctx.membership.admin && unscheduledWaitlist) {
+      throw new OperationOutcomeError(forbidden('Only a Project Admin may cancel an unassigned waitlist request.'));
+    }
+    if (practitionerId && !ctx.membership.admin && !(current.participant ?? []).some((participant) =>
+      participant.actor?.reference === `Practitioner/${practitionerId}`
+    )) {
+      throw new OperationOutcomeError(forbidden('Only the Practitioner assigned to this Appointment may cancel it.'));
+    }
+    const at = new Date().toISOString();
+    const actor = practitionerId ? `Practitioner/${practitionerId}` : 'Project Admin';
+    const updated = await txRepo.updateResource<Appointment>({
+      ...current,
+      status: 'cancelled',
+      comment: [current.comment, `[${at} · ${actor}] cancelled: ${reason}`].filter(Boolean).join('\n'),
+    }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
+    const slotIds = new Set(current.slot?.map((slot) => /^Slot\/([^/]+)$/.exec(slot.reference ?? '')?.[1])
+      .filter((id): id is string => Boolean(id)) ?? []);
+    for (const slotId of slotIds) await releaseSlotIfSchedulable(txRepo, slotId);
+    return updated;
+  }, { resourceTypes: ['Appointment', 'Slot', 'Schedule', 'Practitioner'], source: 'appointment.staffCancel' });
+  return [allOk, buildOutputParameters(staffCancelOperation, { return: appointment })];
 }
 
 /** Moves the Patient's own future Appointment to a free Slot and releases the old Slot atomically. */
