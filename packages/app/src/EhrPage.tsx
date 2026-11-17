@@ -20,6 +20,16 @@ const encounterNoteTypeLabels: Record<string, string> = {
   procedure: 'Thủ thuật',
 };
 
+const medicationAdministrationStatusLabels: Record<string, string> = {
+  completed: 'Đã dùng',
+  'not-done': 'Không thực hiện',
+  'entered-in-error': 'Nhập nhầm',
+  'in-progress': 'Đang thực hiện',
+  'on-hold': 'Tạm giữ',
+  stopped: 'Đã dừng',
+  unknown: 'Không rõ',
+};
+
 function renderEncounterNote(text: string): React.ReactNode {
   const match = /^\[(progress|assessment|plan|procedure)\]\s*/.exec(text);
   return match ? <><strong>{encounterNoteTypeLabels[match[1]]}:</strong> {text.slice(match[0].length)}</> : text;
@@ -738,6 +748,8 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const form = event.currentTarget;
     const data = new FormData(form);
     const requestId = String(data.get('administrationRequest') ?? '');
+    const outcomeInput = String(data.get('administrationOutcome') ?? 'completed');
+    const outcome = outcomeInput === 'not-done' ? 'not-done' : 'completed';
     const request = medicationRequests.find((item) => item.id === requestId);
     const enteredMedication = String(data.get('administrationMedication') ?? '').trim();
     const medicationConcept = request?.medicationCodeableConcept;
@@ -754,8 +766,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const effective = String(data.get('administrationTime') ?? '');
     const effectiveDate = new Date(effective);
     const noteText = String(data.get('administrationNote') ?? '').trim();
-    if (!patientId || (!enteredMedication && !hasMedicationConcept && !request?.medicationReference?.reference) || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || !Number.isFinite(effectiveDate.getTime()) || effectiveDate.getTime() > Date.now()) {
-      setError(new Error('Chọn bệnh nhân, thuốc, thời điểm đã dùng và liều dùng hợp lệ.'));
+    const statusReason = String(data.get('administrationNotDoneReason') ?? '').trim();
+    if (!patientId || (!enteredMedication && !hasMedicationConcept && !request?.medicationReference?.reference) || !['completed', 'not-done'].includes(outcomeInput) || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || !Number.isFinite(effectiveDate.getTime()) || effectiveDate.getTime() > Date.now() || (outcome === 'not-done' && (!statusReason || doseValue || route))) {
+      setError(new Error('Chọn bệnh nhân, thuốc, thời điểm hợp lệ; liều không được thực hiện cần lý do và không có liều/đường dùng đã ghi nhận.'));
       return;
     }
     setSaving(true);
@@ -767,13 +780,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         resourceType: 'Parameters',
         parameter: [{ name: 'resource', resource: {
           resourceType: 'MedicationAdministration',
-          status: 'completed',
+          status: outcome,
+          statusReason: outcome === 'not-done' ? { text: statusReason } : undefined,
           ...medicationChoice,
           subject: { reference: `Patient/${patientId}` },
           effectiveDateTime: effectiveDate.toISOString(),
           request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
           context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
-          dosage: doseValue || route
+          dosage: outcome === 'completed' && (doseValue || route)
             ? {
                 dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
                 route: route ? { text: route } : undefined,
@@ -785,7 +799,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const administration = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationAdministration | undefined;
       if (!administration) throw new Error('Server did not return the recorded MedicationAdministration.');
       setMedicationAdministrations((current) => [administration, ...current]);
-      setMessage('Đã ghi nhận lần dùng thuốc thực tế.');
+      setMessage(outcome === 'not-done' ? 'Đã ghi nhận liều thuốc không được thực hiện cùng lý do.' : 'Đã ghi nhận lần dùng thuốc thực tế.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -796,7 +810,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
 
   async function markMedicationAdministrationEnteredInError(administration: MedicationAdministration, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!administration.id || administration.status !== 'completed') return;
+    if (!administration.id || !['completed', 'not-done'].includes(administration.status ?? '')) return;
     const form = event.currentTarget;
     const reason = String(new FormData(form).get('administrationErrorReason') ?? '').trim();
     if (!reason) return;
@@ -1598,7 +1612,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createMedicationAdministration}>
           <h2>Ghi nhận dùng thuốc</h2>
-          <p className="muted">Lưu lần dùng thuốc đã thực hiện, có thể liên kết đơn kê và lần khám.</p>
+          <p className="muted">Ghi lần dùng thuốc đã thực hiện hoặc liều không được thực hiện kèm lý do; có thể liên kết đơn kê và lần khám.</p>
           <div className="form-grid">
             <label>Liên kết đơn kê
               <select name="administrationRequest" defaultValue="">
@@ -1609,6 +1623,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </select>
             </label>
             <label>Tên thuốc<input name="administrationMedication" maxLength={200} placeholder="Bắt buộc nếu không chọn đơn kê" /></label>
+            <label>Kết quả
+              <select name="administrationOutcome" defaultValue="completed">
+                <option value="completed">Đã dùng</option>
+                <option value="not-done">Không thực hiện</option>
+              </select>
+            </label>
             <label>Thời điểm dùng<input name="administrationTime" type="datetime-local" defaultValue={localDateTimeInput(new Date().toISOString())} required /></label>
             <label>Liều đã dùng<input name="administrationDoseValue" type="number" min="0.001" step="any" /></label>
             <label>Đơn vị liều<input name="administrationDoseUnit" maxLength={40} placeholder="mg, viên, ml…" /></label>
@@ -1621,10 +1641,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 ))}
               </select>
             </label>
+            <label className="full-width">Lý do không thực hiện<textarea name="administrationNotDoneReason" maxLength={500} rows={2} /></label>
             <label className="full-width">Ghi chú<textarea name="administrationNote" maxLength={500} rows={2} /></label>
           </div>
           <div className="form-actions">
-            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Ghi nhận đã dùng'}</button>
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Ghi nhận kết quả'}</button>
           </div>
         </form>
       )}
@@ -2061,7 +2082,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{administration.medicationCodeableConcept?.text ?? administration.medicationCodeableConcept?.coding?.[0]?.display ?? administration.medicationReference?.display ?? '—'}</td>
                 <td>{dose ? `${dose.value ?? ''} ${dose.unit ?? ''}`.trim() : '—'}</td>
                 <td>{administration.dosage?.route?.text ?? administration.dosage?.route?.coding?.[0]?.display ?? '—'}</td>
-                <td>{administration.status}</td>
+                <td>{medicationAdministrationStatusLabels[administration.status ?? ''] ?? administration.status ?? '—'}{administration.statusReason?.text ? ` · ${administration.statusReason.text}` : ''}</td>
                 <td>{request?.medicationCodeableConcept?.text ?? request?.medicationCodeableConcept?.coding?.[0]?.display ?? administration.request?.display ?? administration.request?.reference ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : administration.context?.display ?? administration.context?.reference ?? '—'}</td>
                 <td>{administration.performer?.map((performer) => performer.actor?.display ?? performer.actor?.reference).filter(Boolean).join(', ') || '—'}</td>

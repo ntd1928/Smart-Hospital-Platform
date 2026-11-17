@@ -29,7 +29,7 @@ const updateOperation = makeOperationDefinition({ scope: 'type', resource: 'Medi
   ],
 });
 
-/** Creates a completed administration after verifying the Patient, order, Encounter and authenticated Practitioner. */
+/** Records an administration outcome after verifying the Patient, order, Encounter and authenticated Practitioner. */
 export async function medicationAdministrationRecordHandler(req: FhirRequest): Promise<FhirResponse> {
   const ctx = getAuthenticatedContext();
   const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
@@ -41,14 +41,17 @@ export async function medicationAdministrationRecordHandler(req: FhirRequest): P
   const patientId = getId(input.subject, 'Patient');
   const effectiveTime = input.effectiveDateTime ? new Date(input.effectiveDateTime).getTime() : Number.NaN;
   if (!patientId) return [badRequest('MedicationAdministration must reference a Patient subject.')];
-  if (input.status !== 'completed' || !Number.isFinite(effectiveTime) || effectiveTime > Date.now()) {
-    return [badRequest('Only completed medication administrations with a valid past or current time can be recorded.')];
+  if (!['completed', 'not-done'].includes(input.status ?? '') || !Number.isFinite(effectiveTime) || effectiveTime > Date.now()) {
+    return [badRequest('Medication administration status must be completed or not-done with a valid past or current time.')];
   }
+  const statusReason = input.statusReason?.text?.trim();
+  if (input.status === 'not-done' && !statusReason) return [badRequest('A reason is required when medication was not administered.')];
   if (!input.medicationCodeableConcept?.text && !input.medicationCodeableConcept?.coding?.length && !input.medicationReference?.reference) {
     return [badRequest('A medication code or reference is required.')];
   }
   const dose = input.dosage?.dose?.value;
   if (dose !== undefined && (!Number.isFinite(dose) || dose <= 0)) return [badRequest('Medication dose must be a positive quantity.')];
+  if (input.status === 'not-done' && input.dosage) return [badRequest('A not-done MedicationAdministration cannot contain an administered dosage.')];
 
   const administration = await ctx.systemRepo.ensureInTransaction(
     async (txRepo) => {
@@ -100,14 +103,17 @@ export async function medicationAdministrationRecordHandler(req: FhirRequest): P
       const at = new Date().toISOString();
       const saved: MedicationAdministration = {
         ...input,
-        status: 'completed',
-        performer: [{ actor: { reference: `Practitioner/${practitionerId}` } }],
+        status: input.status,
+        statusReason: input.status === 'not-done' ? { text: statusReason } : undefined,
+        performer: input.status === 'completed' ? [{ actor: { reference: `Practitioner/${practitionerId}` } }] : undefined,
         note: [
           ...(input.note ?? []).map((note) => ({
             ...note,
             authorReference: { reference: `Practitioner/${practitionerId}` },
           })),
-          { time: at, text: `MedicationAdministration recorded by Practitioner/${practitionerId}.`, authorReference: { reference: `Practitioner/${practitionerId}` } },
+          { time: at, text: input.status === 'not-done'
+            ? `MedicationAdministration not done by Practitioner/${practitionerId}: ${statusReason}`
+            : `MedicationAdministration completed by Practitioner/${practitionerId}.`, authorReference: { reference: `Practitioner/${practitionerId}` } },
         ],
       };
       delete saved.id;
@@ -143,7 +149,7 @@ export async function medicationAdministrationUpdateHandler(req: FhirRequest): P
     );
     const current = await txRepo.readResource<MedicationAdministration>('MedicationAdministration', administrationId);
     verifyProject(current.meta?.project, ctx.project.id);
-    if (current.status !== 'completed') throw new OperationOutcomeError(conflict('Only a completed MedicationAdministration can be corrected; entered-in-error records are immutable.'));
+    if (!['completed', 'not-done'].includes(current.status ?? '')) throw new OperationOutcomeError(conflict('Only a completed or not-done MedicationAdministration can be corrected; entered-in-error records are immutable.'));
     const patientId = getId(current.subject, 'Patient');
     if (!patientId) throw new OperationOutcomeError(badRequest('MedicationAdministration must reference one Patient.'));
     const patient = await txRepo.readResource<Patient>('Patient', patientId);
