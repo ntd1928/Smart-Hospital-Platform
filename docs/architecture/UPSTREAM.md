@@ -26,6 +26,7 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - MedicationStatement CRUD của Practitioner được chuyển sang operation server-side để kiểm tra Patient được gán, tính nhất quán Encounter/MedicationRequest và actor audit; policy chặn ghi trực tiếp.
 - MedicationRequest kê đơn và cập nhật vòng đời chuyển sang operation server-side có assignment/Encounter validation, rà soát AllergyIntolerance medication đang active, xác nhận người kê và audit; policy chặn Practitioner ghi trực tiếp.
 - AllergyIntolerance create/review chuyển sang operation server-side có assignment check, lock và audit reason; policy chặn Practitioner ghi trực tiếp.
+- Series lịch lặp được lưu bằng nested FHIR Extension trên Schedule, hiển thị và chỉnh sửa cả khi không còn Slot trống; thay quy tắc cùng các Slot tương lai bằng transaction có giới hạn, hủy rule theo batch và giữ Slot đã đặt.
 - Recurring Slot series được phát hiện lại từ identifier đã lưu trên FHIR Slot và Schedule, thay danh sách 20 series trong sessionStorage; staff tra cứu, thay hoặc ngừng Slot trống tương lai sau khi đăng nhập lại.
 
 `upstream-manifest.json` ghi path/hash upstream và hiện tại. `scripts/extract-upstream.mjs` là công cụ tham khảo dependency khi nhập; chạy app không cần checkout Medplum bên cạnh. Khi phát triển tuần sau, bổ sung từng module với test và cập nhật manifest.

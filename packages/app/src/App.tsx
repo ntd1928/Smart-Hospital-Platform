@@ -196,7 +196,45 @@ interface RecurringSlotSeries {
   id: string;
   schedule: Schedule;
   freeSlotCount: number;
-  nextStart: string;
+  nextStart?: string;
+  startDate: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
+  weekdays: number[];
+}
+
+const RECURRING_SLOT_RULE_URL = `${RECURRING_SLOT_SERIES_SYSTEM}/rule`;
+
+function readRecurringSlotRules(schedule: Schedule): RecurringSlotSeries[] {
+  if (!schedule.id) return [];
+  return (schedule.extension ?? []).filter((extension) => extension.url === RECURRING_SLOT_RULE_URL).flatMap((extension) => {
+    const children = extension.extension ?? [];
+    const value = (url: string): string | undefined => children.find((child) => child.url === url)?.valueString;
+    const weekdays = children.filter((child) => child.url === 'weekday').map((child) => child.valueInteger)
+      .filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6);
+    const id = value('series-id');
+    const startDate = children.find((child) => child.url === 'start-date')?.valueDate;
+    const endDate = children.find((child) => child.url === 'end-date')?.valueDate;
+    const startTime = children.find((child) => child.url === 'start-time')?.valueTime;
+    const endTime = children.find((child) => child.url === 'end-time')?.valueTime;
+    if (!id || !startDate || !endDate || !startTime || !endTime || weekdays.length === 0) return [];
+    return [{ id, schedule, freeSlotCount: 0, startDate, endDate, startTime, endTime, weekdays }];
+  });
+}
+
+function toRecurringSlotRuleExtension(rule: RecurringSlotSeries): NonNullable<Schedule['extension']>[number] {
+  return {
+    url: RECURRING_SLOT_RULE_URL,
+    extension: [
+      { url: 'series-id', valueString: rule.id },
+      { url: 'start-date', valueDate: rule.startDate },
+      { url: 'end-date', valueDate: rule.endDate },
+      { url: 'start-time', valueTime: rule.startTime },
+      { url: 'end-time', valueTime: rule.endTime },
+      ...rule.weekdays.map((weekday) => ({ url: 'weekday', valueInteger: weekday })),
+    ],
+  };
 }
 
 function Dashboard({ role }: { role: HospitalRole }) {
@@ -325,6 +363,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   const [recurringSeries, setRecurringSeries] = useState<RecurringSlotSeries[]>([]);
   const [selectedRecurringSeriesId, setSelectedRecurringSeriesId] = useState<string>();
   const [seriesPractitionerFilter, setSeriesPractitionerFilter] = useState('');
+  const [editRecurringSeries, setEditRecurringSeries] = useState(false);
   const patientProfile = profile.resourceType === 'Patient' ? profile : undefined;
   const doctorProfile = profile.resourceType === 'Practitioner' ? profile : undefined;
   const staff = role !== 'Patient';
@@ -391,10 +430,13 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     let live = true;
     const loadSeries = async (): Promise<void> => {
       const now = new Date().toISOString();
-      const grouped = new Map<string, { schedule: Schedule; freeSlotCount: number; nextStart: string }>();
+      const grouped = new Map<string, RecurringSlotSeries>();
       const allSchedules: Schedule[] = [];
       for await (const page of client.searchResourcePages('Schedule', { _count: '100' })) allSchedules.push(...page);
       const activeSchedules = allSchedules.filter((schedule): schedule is Schedule & { id: string } => schedule.active !== false && Boolean(schedule.id));
+      for (const schedule of activeSchedules) {
+        for (const rule of readRecurringSlotRules(schedule)) grouped.set(rule.id, rule);
+      }
       for (let index = 0; index < activeSchedules.length; index += 5) {
         await Promise.all(activeSchedules.slice(index, index + 5).map(async (schedule) => {
           for await (const page of client.searchResourcePages('Slot', {
@@ -408,10 +450,11 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
               const identifier = slot.identifier?.find((item) => item.system === RECURRING_SLOT_SERIES_SYSTEM)?.value;
               if (!identifier || !slot.start) continue;
               const current = grouped.get(identifier);
+              if (!current) continue;
               grouped.set(identifier, {
-                schedule,
-                freeSlotCount: (current?.freeSlotCount ?? 0) + 1,
-                nextStart: !current || slot.start < current.nextStart ? slot.start : current.nextStart,
+                ...current,
+                freeSlotCount: current.freeSlotCount + 1,
+                nextStart: !current.nextStart || slot.start < current.nextStart ? slot.start : current.nextStart,
               });
             }
           }
@@ -419,7 +462,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       }
       if (!live) return;
       const summaries = [...grouped.entries()].map(([id, summary]) => ({ id, ...summary }))
-        .sort((left, right) => left.nextStart.localeCompare(right.nextStart));
+        .sort((left, right) => (left.nextStart ?? left.startDate).localeCompare(right.nextStart ?? right.startDate));
       setRecurringSeries(summaries);
       setSelectedRecurringSeriesId((current) => summaries.some((series) => series.id === current) ? current : summaries[0]?.id);
     };
@@ -838,17 +881,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     const form = event.currentTarget;
     const data = new FormData(form);
     const replaceSeries = data.has('replaceRecurringSeries');
-    const seriesIdToReplace = selectedRecurringSeriesId && displayedRecurringSeries.some((series) => series.id === selectedRecurringSeriesId)
-      ? selectedRecurringSeriesId
-      : displayedRecurringSeries[0]?.id;
+    const seriesIdToReplace = selectedRecurringSeries?.id;
     const selectedSeries = recurringSeries.find((series) => series.id === seriesIdToReplace);
     const seriesPractitionerId = /^Practitioner\/([^/]+)$/.exec(
       selectedSeries?.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference ?? ''
     )?.[1];
-    const practitionerId = role === 'Doctor'
-      ? profile.id
-      : replaceSeries
-        ? seriesPractitionerId
+    const practitionerId = replaceSeries
+      ? seriesPractitionerId
+      : role === 'Doctor'
+        ? profile.id
         : String(data.get('availabilityPractitioner'));
     const intervals = removeOverlappingIntervals(expandRecurringSlotIntervals({
       startDate: new Date(`${String(data.get('recurringStartDate'))}T00:00:00`),
@@ -857,12 +898,8 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       endTime: String(data.get('recurringEndTime')),
       weekdays: data.getAll('recurringWeekday').map(Number),
     })).filter(({ start }) => start > new Date());
-    if (!practitionerId || intervals.length === 0) {
+    if (!practitionerId || intervals.length === 0 || data.getAll('recurringWeekday').length === 0) {
       setError(new Error('Chọn các ngày và khoảng thời gian tương lai hợp lệ để tạo lịch.'));
-      return;
-    }
-    if (intervals.length > 100) {
-      setError(new Error('Lịch lặp vượt quá 100 Slot. Hãy rút ngắn khoảng ngày.'));
       return;
     }
     if (replaceSeries && !seriesIdToReplace) {
@@ -888,13 +925,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           _count: '100',
         })) oldSeriesSlots.push(...page);
       }
-      if (replaceSeries && oldSeriesSlots.length === 0) {
-        setError(new Error('Series không còn Slot trống trong tương lai để thay đổi.'));
-        return;
-      }
       const activeSchedules = practitionerSchedules.filter((item) => item.active !== false);
       let schedule = replaceSeries
-        ? activeSchedules.find((item) => `Schedule/${item.id}` === oldSeriesSlots[0]?.schedule?.reference)
+        ? activeSchedules.find((item) => `Schedule/${item.id}` === selectedSeries?.schedule.id &&
+          readRecurringSlotRules(item).some((rule) => rule.id === seriesIdToReplace))
         : activeSchedules[0];
       if (replaceSeries && !schedule) {
         setError(new Error('Series không thuộc bác sĩ đã chọn hoặc Schedule của series đã ngừng hoạt động.'));
@@ -913,7 +947,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         ({ start, end }) => !findAppointmentConflict(appointments, practitionerId, start, end)
       );
       if (availableIntervals.length === 0) {
-        setError(new Error('Mọi khung giờ tạo ra đều trùng với lịch hẹn hoặc Slot hiện có.'));
+        setError(new Error('Không có khung giờ mới khả dụng; quy tắc và các Slot hiện tại chưa được thay đổi.'));
         return;
       }
       if (!schedule && !replaceSeries) {
@@ -926,7 +960,40 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       }
       if (!schedule) throw new Error('Schedule không khả dụng để tạo Slot.');
       const seriesId = replaceSeries ? seriesIdToReplace! : crypto.randomUUID();
+      const seriesRule: RecurringSlotSeries = {
+        id: seriesId,
+        schedule,
+        freeSlotCount: availableIntervals.length,
+        nextStart: availableIntervals[0]?.start.toISOString(),
+        startDate: String(data.get('recurringStartDate')),
+        endDate: String(data.get('recurringEndDate')),
+        startTime: String(data.get('recurringStartTime')),
+        endTime: String(data.get('recurringEndTime')),
+        weekdays: data.getAll('recurringWeekday').map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
+      };
+      const existingRules = (schedule.extension ?? []).filter((extension) =>
+        !(extension.url === RECURRING_SLOT_RULE_URL && extension.extension?.some((item) => item.url === 'series-id' && item.valueString === seriesId))
+      );
+      const updatedSchedule: Schedule = {
+        ...schedule,
+        extension: [...existingRules, toRecurringSlotRuleExtension(seriesRule)],
+      };
+      const operationCount = (schedule.id ? 1 : 0) + oldSeriesSlots.filter((slot) => slot.id).length + availableIntervals.length;
+      if (operationCount > 100) {
+        setError(new Error(`Thay series cần ${operationCount} thao tác, vượt giới hạn 100. Hãy rút ngắn khoảng ngày.`));
+        return;
+      }
       const transactionEntries = [
+        ...(schedule.id ? [
+          {
+            resource: updatedSchedule,
+            request: {
+              method: 'PUT',
+              url: `Schedule/${schedule.id}`,
+              ifMatch: schedule.meta?.versionId ? `W/\"${schedule.meta.versionId}\"` : undefined,
+            },
+          },
+        ] : []),
         ...oldSeriesSlots.filter((slot) => slot.id).map((slot) => ({
           resource: { ...slot, status: 'entered-in-error' },
           request: {
@@ -956,6 +1023,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         type: 'transaction',
         entry: transactionEntries,
       });
+      setEditRecurringSeries(false);
       setSelectedRecurringSeriesId(seriesId);
       setMessage(
         `${replaceSeries ? 'Đã cập nhật' : 'Đã thêm'} ${availableIntervals.length} khung giờ; bỏ qua ${
@@ -972,9 +1040,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
   }
 
   async function cancelCreatedRecurringSeries() {
-    const seriesId = selectedRecurringSeriesId && displayedRecurringSeries.some((series) => series.id === selectedRecurringSeriesId)
-      ? selectedRecurringSeriesId
-      : displayedRecurringSeries[0]?.id;
+    const seriesId = selectedRecurringSeries?.id;
     if (!seriesId || !window.confirm('Hủy các Slot trống trong tương lai của series đã chọn?')) return;
     setBusy(true);
     setError(undefined);
@@ -1005,7 +1071,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           })),
         });
       }
+      const latestSchedule = await client.readResource<Schedule>('Schedule', series.schedule.id);
+      await client.updateResource<Schedule>({
+        ...latestSchedule,
+        extension: (latestSchedule.extension ?? []).filter((extension) =>
+          !(extension.url === RECURRING_SLOT_RULE_URL && extension.extension?.some((item) => item.url === 'series-id' && item.valueString === seriesId))
+        ),
+      });
       setMessage(`Đã ngừng ${seriesSlots.length} Slot còn trống; Slot đã có lịch hẹn được giữ nguyên.`);
+      setSelectedRecurringSeriesId(undefined);
       setRefresh((value) => value + 1);
     } catch (e) {
       setError(e);
@@ -1077,6 +1151,12 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     const practitionerReference = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
     return !seriesPractitionerFilter || practitionerReference === `Practitioner/${seriesPractitionerFilter}`;
   });
+  const selectedRecurringSeries = displayedRecurringSeries.find((series) => series.id === selectedRecurringSeriesId) ?? displayedRecurringSeries[0];
+  useEffect(() => {
+    if (editRecurringSeries && !displayedRecurringSeries.some((series) => series.id === selectedRecurringSeriesId)) {
+      setEditRecurringSeries(false);
+    }
+  }, [displayedRecurringSeries, editRecurringSeries, selectedRecurringSeriesId]);
   const displayedAppointments = staff
     ? [...appointments].sort((left, right) => {
         const leftWaiting = left.status === 'waitlist' && !left.start;
@@ -1264,9 +1344,9 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         </form>
       )}
       {staff && (
-        <form className="panel editor" onSubmit={createRecurringAvailability}>
-          <h2>Tạo khung giờ lặp</h2>
-          <p className="muted">Tạo hoặc thay Slot trống của lịch lặp; Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
+        <form key={`${selectedRecurringSeries?.id ?? 'new'}:${editRecurringSeries}`} className="panel editor" onSubmit={createRecurringAvailability}>
+          <h2>{editRecurringSeries ? 'Chỉnh sửa quy tắc lịch lặp' : 'Tạo khung giờ lặp'}</h2>
+          <p className="muted">Quy tắc được lưu trên Schedule và vẫn có thể chỉnh sửa khi không còn Slot trống. Slot đã có lịch hẹn được giữ nguyên. Mỗi transaction tối đa 100 thao tác.</p>
           <div className="form-grid">
             {role === 'Admin' ? (
               <label>
@@ -1281,36 +1361,36 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
             ) : (
               <label>Bác sĩ<input value={doctorProfile ? personName(doctorProfile) : 'Hồ sơ bác sĩ hiện tại'} disabled /></label>
             )}
-            <label>Ngày bắt đầu<input name="recurringStartDate" type="date" required /></label>
-            <label>Ngày kết thúc<input name="recurringEndDate" type="date" required /></label>
-            <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required /></label>
-            <label>Giờ kết thúc<input name="recurringEndTime" type="time" required /></label>
+            <label>Ngày bắt đầu<input name="recurringStartDate" type="date" required defaultValue={editRecurringSeries ? selectedRecurringSeries?.startDate : undefined} /></label>
+            <label>Ngày kết thúc<input name="recurringEndDate" type="date" required defaultValue={editRecurringSeries ? selectedRecurringSeries?.endDate : undefined} /></label>
+            <label>Giờ bắt đầu<input name="recurringStartTime" type="time" required defaultValue={editRecurringSeries ? selectedRecurringSeries?.startTime : undefined} /></label>
+            <label>Giờ kết thúc<input name="recurringEndTime" type="time" required defaultValue={editRecurringSeries ? selectedRecurringSeries?.endTime : undefined} /></label>
             <label className="full-width">
-              <input name="replaceRecurringSeries" type="checkbox" disabled={recurringSeries.length === 0} />
-              {' '}Thay các Slot còn trống trong tương lai của series đã chọn
+              <input name="replaceRecurringSeries" type="checkbox" checked={editRecurringSeries} disabled={!selectedRecurringSeries} onChange={(event) => setEditRecurringSeries(event.currentTarget.checked)} />
+              {' '}Chỉnh sửa quy tắc và thay Slot còn trống của series đã chọn
             </label>
             <fieldset className="full-width">
               <legend>Ngày trong tuần</legend>
               {['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].map((day, index) => (
-                <label key={day}><input name="recurringWeekday" type="checkbox" value={index} /> {day}</label>
+                <label key={day}><input name="recurringWeekday" type="checkbox" value={index} defaultChecked={editRecurringSeries && selectedRecurringSeries?.weekdays.includes(index)} /> {day}</label>
               ))}
             </fieldset>
           </div>
           <div className="form-actions">
             <button className="button primary" disabled={busy || (role === 'Admin' && practitioners.length === 0)}>
-              {busy ? 'Đang lưu…' : 'Tạo lịch lặp'}
+              {busy ? 'Đang lưu…' : editRecurringSeries ? 'Lưu quy tắc lịch lặp' : 'Tạo lịch lặp'}
             </button>
             {recurringSeries.length > 0 && (
               <>
                 {role === 'Admin' && <label>
-                  Шүүх эмчээр
+                  Lọc theo bác sĩ
                   <select value={seriesPractitionerFilter} onChange={(event) => setSeriesPractitionerFilter(event.currentTarget.value)}>
-                    <option value="">Бүх эмч</option>
+                    <option value="">Tất cả bác sĩ</option>
                     {practitioners.map((practitioner) => <option key={practitioner.id} value={practitioner.id}>{personName(practitioner)}</option>)}
                   </select>
                 </label>}
                 <label>
-                  Series còn Slot trống
+                  Quy tắc lịch lặp
                   <select
                     value={selectedRecurringSeriesId ?? displayedRecurringSeries[0]?.id ?? ''}
                     onChange={(event) => setSelectedRecurringSeriesId(event.currentTarget.value)}
@@ -1319,14 +1399,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                       const practitionerRef = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
                       const practitioner = practitioners.find((item) => `Practitioner/${item.id}` === practitionerRef);
                       return <option key={series.id} value={series.id}>{
-                        `${practitioner ? personName(practitioner) : practitionerRef ?? 'Bác sĩ'} · ${new Date(series.nextStart).toLocaleString('vi-VN')} · ${series.freeSlotCount} Slot`
+                        `${practitioner ? personName(practitioner) : practitionerRef ?? 'Bác sĩ'} · ${series.nextStart ? new Date(series.nextStart).toLocaleString('vi-VN') : `${series.startDate} ${series.startTime}`} · ${series.freeSlotCount} Slot trống`
                       }</option>;
                     })}
                   </select>
                 </label>
-                <button className="button" type="button" disabled={busy} onClick={cancelCreatedRecurringSeries}>
-                  Hủy Slot trống của series đã chọn
+                <button className="button" type="button" disabled={busy || !selectedRecurringSeries} onClick={cancelCreatedRecurringSeries}>
+                  Ngừng quy tắc và Slot trống
                 </button>
+                {editRecurringSeries && <button className="button" type="button" disabled={busy} onClick={() => setEditRecurringSeries(false)}>Bỏ chỉnh sửa</button>}
               </>
             )}
           </div>
