@@ -36,7 +36,7 @@ CI được cấu hình cho pull request và push vào main/develop: quality gat
 
 Credentials demo chỉ phục vụ localhost và runner CI dùng dữ liệu giả; token và mật khẩu môi trường thật không được commit. Trước thao tác Git, kiểm tra git status và yêu cầu hiện hành.
 
-EHR ghi dấu hiệu sinh tồn thành Observation theo mã LOINC và UCUM; huyết áp dùng component tâm thu/tâm trương. `$record` kiểm tra Patient/Encounter/assignment và ghi 1–100 Observation cùng transaction server-side; `$update` khóa resource, chỉ cho amended hoặc entered-in-error với lý do bắt buộc và actor audit. Practitioner, Patient và Admin không ghi Observation trực tiếp qua FHIR CRUD; Patient chỉ đọc qua compartment. Bảng lịch sử hiển thị cả Observation dạng component.
+EHR ghi dấu hiệu sinh tồn thành Observation theo mã LOINC và UCUM; huyết áp dùng component tâm thu/tâm trương. `$record` kiểm tra Patient/Encounter/assignment và ghi 1–100 Observation cùng transaction server-side; `$update` khóa resource, chỉ cho amended hoặc entered-in-error với lý do bắt buộc và actor audit. Practitioner, Patient và Admin không ghi Observation trực tiếp qua FHIR CRUD; Patient chỉ đọc qua compartment. Bảng lịch sử có lọc trạng thái để xem riêng kết quả nhập nhầm; dashboard và danh sách gần đây không tính kết quả đó vào kết quả hợp lệ.
 
 Staff và Patient có thể tải tóm tắt hồ sơ thành FHIR R4 document Bundle với Composition preliminary đứng đầu, LOINC 34133-9 và section liên kết bằng fullUrl tới tài nguyên đã tải theo quyền hiện tại. Bản xuất JSON không tải thêm dữ liệu, không attestation và không thay hồ sơ nguồn.
 

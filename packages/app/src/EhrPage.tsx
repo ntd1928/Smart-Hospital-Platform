@@ -58,6 +58,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [conditionVerificationStatus, setConditionVerificationStatus] = useState('');
   const [observationSearch, setObservationSearch] = useState('');
   const [observationCategory, setObservationCategory] = useState('');
+  const [observationStatus, setObservationStatus] = useState('');
   const [observationFrom, setObservationFrom] = useState('');
   const [observationTo, setObservationTo] = useState('');
   const [medicationSearch, setMedicationSearch] = useState('');
@@ -1184,7 +1185,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage(`Đã xuất FHIR document preliminary với ${uniqueResources.length} tài nguyên đang có trong hồ sơ tải.`);
   }
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
-  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'entered-in-error').length;
+  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).length;
   const ehrConsistencyFindings: string[] = [];
   const encounterIds = new Set(encounters.map((item) => item.id).filter(Boolean));
   const appointmentById = new Map(appointments.filter((item) => item.id).map((item) => [item.id as string, item]));
@@ -1254,6 +1255,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const effectiveDate = observation.effectiveDateTime?.slice(0, 10) ?? '';
     return (!observationQuery || code.toLocaleLowerCase().includes(observationQuery))
       && (!observationCategory || observation.category?.some((category) => category.coding?.some((coding) => coding.code === observationCategory)))
+      && (!observationStatus || observation.status === observationStatus)
       && (!observationFrom || (effectiveDate && effectiveDate >= observationFrom))
       && (!observationTo || (effectiveDate && effectiveDate <= observationTo));
   });
@@ -1381,7 +1383,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {patientId && <div className="stat-grid">
         <section className="stat-card"><span>Lần khám</span><strong>{encounters.length}</strong><small>{inProgressEncounterCount} đang diễn ra</small></section>
         <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
-        <section className="stat-card"><span>Kết quả</span><strong>{observations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
+        <section className="stat-card"><span>Kết quả hợp lệ</span><strong>{observations.filter((observation) => observation.status !== 'entered-in-error').length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
       </div>}
       {patientId && !loading && <section className={`notice ${ehrConsistencyFindings.length ? 'error' : ''}`} aria-live="polite">
         <strong>Rà soát liên kết hồ sơ:</strong>{' '}
@@ -1845,6 +1847,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <option value="other">Khác</option>
             </select>
           </label>
+          <label>Trạng thái
+            <select value={observationStatus} onChange={(event) => setObservationStatus(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="preliminary">Sơ bộ</option>
+              <option value="final">Cuối cùng</option>
+              <option value="amended">Đã chỉnh sửa</option>
+              <option value="entered-in-error">Nhập nhầm</option>
+            </select>
+          </label>
           <label>Từ ngày<input type="date" value={observationFrom} onChange={(event) => setObservationFrom(event.currentTarget.value)} /></label>
           <label>Đến ngày<input type="date" value={observationTo} onChange={(event) => setObservationTo(event.currentTarget.value)} /></label>
         </div>
@@ -1858,7 +1869,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{observation.category?.[0]?.coding?.[0]?.display ?? observationCategoryLabels[observation.category?.[0]?.coding?.[0]?.code ?? ''] ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
                 <td>{formatObservationValue(observation)}</td>
-                <td>{observation.status}</td>
+              <td>{({ preliminary: 'Sơ bộ', final: 'Cuối cùng', amended: 'Đã chỉnh sửa', 'entered-in-error': 'Nhập nhầm' } as Record<string, string>)[observation.status] ?? observation.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
                 <td>{observation.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 {role !== 'Patient' && <td>{observation.status !== 'entered-in-error' ? <>
