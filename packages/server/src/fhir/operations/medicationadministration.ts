@@ -143,7 +143,7 @@ export async function medicationAdministrationUpdateHandler(req: FhirRequest): P
     );
     const current = await txRepo.readResource<MedicationAdministration>('MedicationAdministration', administrationId);
     verifyProject(current.meta?.project, ctx.project.id);
-    if (current.status !== 'completed') throw new OperationOutcomeError(conflict('Only a completed MedicationAdministration can be corrected.'));
+    if (current.status !== 'completed') throw new OperationOutcomeError(conflict('Only a completed MedicationAdministration can be corrected; entered-in-error records are immutable.'));
     const patientId = getId(current.subject, 'Patient');
     if (!patientId) throw new OperationOutcomeError(badRequest('MedicationAdministration must reference one Patient.'));
     const patient = await txRepo.readResource<Patient>('Patient', patientId);

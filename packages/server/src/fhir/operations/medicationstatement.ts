@@ -113,6 +113,10 @@ export async function medicationStatementUpdateStatusHandler(req: FhirRequest): 
     if (patient.active === false) throw new OperationOutcomeError(conflict('Cannot reconcile medications for an inactive Patient.'));
     await authorizePatient(txRepo, ctx, patient, practitionerId);
     if (current.status === 'entered-in-error') throw new OperationOutcomeError(conflict('MedicationStatement is marked entered-in-error.'));
+    if (['completed', 'stopped', 'not-taken'].includes(current.status ?? '')) {
+      throw new OperationOutcomeError(conflict('A completed, stopped, or not-taken MedicationStatement cannot be changed. Record a new reconciliation instead.'));
+    }
+    if (params.status === current.status) throw new OperationOutcomeError(conflict('MedicationStatement already has the requested status.'));
     const now = new Date().toISOString();
     return txRepo.updateResource<MedicationStatement>({
       ...current,

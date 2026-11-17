@@ -1926,7 +1926,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{basedOnRequest?.medicationCodeableConcept?.text ?? basedOnRequest?.medicationCodeableConcept?.coding?.[0]?.display ?? statement.basedOn?.map((reference) => reference.display ?? reference.reference).join(', ') ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : statement.context?.display ?? statement.context?.reference ?? '—'}</td>
                 <td>{statement.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
-                {role !== 'Patient' && <td><details>
+                {role !== 'Patient' && <td>{['active', 'on-hold'].includes(statement.status) ? <details>
                   <summary>Cập nhật</summary>
                   <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
                     <label>Trạng thái
@@ -1941,7 +1941,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                     <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
                     <button className="button" disabled={saving}>Lưu thay đổi</button>
                   </form>
-                </details></td>}
+                </details> : 'Trạng thái kết thúc · chỉ xem'}</td>}
               </tr>
             );
           })}</tbody>
