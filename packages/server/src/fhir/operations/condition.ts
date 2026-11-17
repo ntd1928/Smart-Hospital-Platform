@@ -24,7 +24,7 @@ const reviewOperation = makeOperationDefinition({ scope: 'type', resource: 'Cond
   ],
 });
 
-const changes = ['confirm', 'refute', 'active', 'inactive', 'resolved'] as const;
+const changes = ['confirm', 'refute', 'active', 'inactive', 'resolved', 'entered-in-error'] as const;
 type Change = (typeof changes)[number];
 const clinicalSystem = 'http://terminology.hl7.org/CodeSystem/condition-clinical';
 const verificationSystem = 'http://terminology.hl7.org/CodeSystem/condition-ver-status';
@@ -146,6 +146,11 @@ export async function conditionReviewHandler(req: FhirRequest): Promise<FhirResp
         clinicalStatus = { coding: [{ system: clinicalSystem, code: 'resolved' }] };
         abatementDateTime = new Date().toISOString();
         break;
+      case 'entered-in-error':
+        if (verification === 'entered-in-error') throw new OperationOutcomeError(conflict('Condition is already marked entered-in-error.'));
+        verificationStatus = { coding: [{ system: verificationSystem, code: 'entered-in-error' }] };
+        clinicalStatus = undefined;
+        break;
     }
     const at = new Date().toISOString();
     return txRepo.updateResource<Condition>({
@@ -162,7 +167,9 @@ export async function conditionReviewHandler(req: FhirRequest): Promise<FhirResp
       } : {}),
       note: [...(current.note ?? []), {
         time: at,
-        text: `Condition ${params.change}: ${reason}`,
+        text: params.change === 'entered-in-error'
+          ? `Condition marked entered-in-error from verification ${verification ?? 'unknown'} and clinical status ${clinical ?? 'none'}: ${reason}`
+          : `Condition ${params.change}: ${reason}`,
         authorReference: { reference: `Practitioner/${practitionerId}` },
       }],
     }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);

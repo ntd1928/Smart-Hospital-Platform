@@ -405,7 +405,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function reviewCondition(condition: Condition, change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved', event: FormEvent<HTMLFormElement>) {
+  async function reviewCondition(condition: Condition, change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved' | 'entered-in-error', event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!condition.id) return;
     const form = event.currentTarget;
@@ -1184,7 +1184,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage(`Đã xuất FHIR document preliminary với ${uniqueResources.length} tài nguyên đang có trong hồ sơ tải.`);
   }
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
-  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
+  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'entered-in-error').length;
   const ehrConsistencyFindings: string[] = [];
   const encounterIds = new Set(encounters.map((item) => item.id).filter(Boolean));
   const appointmentById = new Map(appointments.filter((item) => item.id).map((item) => [item.id as string, item]));
@@ -1322,8 +1322,8 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <h2>Dị ứng đang hoạt động</h2>
         {activeAllergies.length ? <ul>{activeAllergies.map((allergy) => <li key={allergy.id}>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ tác nhân'} · {allergy.verificationStatus?.coding?.[0]?.code ?? 'unknown'}{allergy.criticality ? ` · nguy cơ ${allergy.criticality}` : ''}{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).map((text) => ` · phản ứng ${text}`)}</li>)}</ul> : <p>Chưa ghi nhận.</p>}
         <h2>Chẩn đoán đang hoạt động</h2>
-        {conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').length
-          ? <ul>{conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').map((condition) => <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.verificationStatus?.coding?.[0]?.code ?? 'unknown'}</li>)}</ul>
+        {conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).length
+          ? <ul>{conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).map((condition) => <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.verificationStatus?.coding?.[0]?.code ?? 'unknown'}</li>)}</ul>
           : <p>Chưa ghi nhận.</p>}
         <h2>Thuốc đang dùng</h2>
         {medicationStatements.filter((statement) => statement.status === 'active').length
@@ -1789,6 +1789,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <option value="unconfirmed">Chưa xác minh</option>
               <option value="differential">Chẩn đoán phân biệt</option>
               <option value="refuted">Bác bỏ</option>
+              <option value="entered-in-error">Nhập nhầm</option>
             </select>
           </label>
         </div>
@@ -1808,11 +1809,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   {(() => {
                     const verification = condition.verificationStatus?.coding?.[0]?.code ?? '';
                     const clinical = condition.clinicalStatus?.coding?.[0]?.code ?? '';
-                    const actions: { change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved'; label: string }[] = [];
-                    if (['provisional', 'unconfirmed', 'differential'].includes(verification)) actions.push({ change: 'confirm', label: 'Xác nhận' });
-                    if (!['refuted', 'entered-in-error'].includes(verification)) actions.push({ change: 'refute', label: 'Bác bỏ chẩn đoán' });
-                    if (clinical === 'active') actions.push({ change: 'resolved', label: 'Đánh dấu đã giải quyết' }, { change: 'inactive', label: 'Tạm ngưng' });
-                    if (clinical === 'inactive' && verification !== 'refuted') actions.push({ change: 'active', label: 'Tái hoạt' });
+                    const actions: { change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved' | 'entered-in-error'; label: string }[] = [];
+                    if (verification !== 'entered-in-error') {
+                      if (['provisional', 'unconfirmed', 'differential'].includes(verification)) actions.push({ change: 'confirm', label: 'Xác nhận' });
+                      if (verification !== 'refuted') actions.push({ change: 'refute', label: 'Bác bỏ chẩn đoán' });
+                      if (clinical === 'active' && verification !== 'refuted') actions.push({ change: 'resolved', label: 'Đánh dấu đã giải quyết' }, { change: 'inactive', label: 'Tạm ngưng' });
+                      if (clinical === 'inactive' && verification !== 'refuted') actions.push({ change: 'active', label: 'Tái hoạt' });
+                      actions.push({ change: 'entered-in-error', label: 'Đánh dấu nhập nhầm' });
+                    }
                     return actions.length ? <details>
                       <summary>Cập nhật vòng đời</summary>
                       {actions.map(({ change, label }) => <form className="editor" key={change} onSubmit={(event) => void reviewCondition(condition, change, event)}>
