@@ -28,6 +28,7 @@ Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, 
 - AllergyIntolerance create/review chuyển sang operation server-side có assignment check, lock và audit reason; policy chặn Practitioner ghi trực tiếp.
 - Condition recording/review chuyển sang `$record`/`$review`: Patient assignment, liên kết Encounter cùng Patient, chuyển trạng thái có ràng buộc, lý do bắt buộc, per-resource lock/version guard và Practitioner audit; policy giữ Patient read-only và chặn CRUD trực tiếp.
 - Observation ghi đơn lẻ hoặc batch 1–100 dùng `$record` nguyên tử; `$update` xử lý amended/entered-in-error dưới lock, assignment/project validation và actor/reason audit. Policy chặn ghi CRUD trực tiếp để giữ history Patient read-only.
+- AccessPolicy chặn FHIR CRUD writes cho Encounter, Condition, Observation, MedicationRequest, MedicationStatement, MedicationAdministration và AllergyIntolerance trên mọi role; resource được ghi qua operation lifecycle có kiểm tra/audit.
 - Waitlist Appointment hỗ trợ khoảng ngày mong muốn theo timezone IANA của Patient; cập nhật request cùng dịch vụ idempotent, lọc Slot phía staff và kiểm tra lại preference trong operation server-side.
 - Staff Appointment cancellation chuyển từ transaction do client dựng sang operation server-side có role/assignment check, lý do bắt buộc, khóa theo Appointment và cập nhật Slot nguyên tử.
 - Recurring Slot rule lưu timezone IANA và tạo interval theo giờ địa phương của zone đó thay vì timezone hiện tại của trình duyệt; giờ địa phương không tồn tại khi chuyển DST bị bỏ qua.

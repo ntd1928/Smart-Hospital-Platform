@@ -16,7 +16,7 @@ import {
   appointmentStartEncounterHandler,
   appointmentWaitlistHandler,
 } from './operations/appointments';
-import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
+import { medicationAdministrationRecordHandler, medicationAdministrationUpdateHandler } from './operations/medicationadministration';
 import { conditionRecordHandler, conditionReviewHandler } from './operations/condition';
 import { observationRecordHandler, observationUpdateHandler } from './operations/observation';
 import { encounterAddNoteHandler, encounterCancelHandler, encounterCompleteHandler, encounterRecordHandler, encounterUpdateDetailsHandler } from './operations/encounters';
@@ -106,6 +106,7 @@ router.add('POST', '/Appointment/$staff-cancel', appointmentStaffCancelHandler);
 router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
 router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);
+router.add('POST', '/MedicationAdministration/$update', medicationAdministrationUpdateHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

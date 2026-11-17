@@ -762,27 +762,59 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('administrationEncounter') ?? '');
-      const administration = await client.post('fhir/R4/MedicationAdministration/$record', {
-        resourceType: 'MedicationAdministration',
-        status: 'completed',
-        ...medicationChoice,
-        subject: { reference: `Patient/${patientId}` },
-        effectiveDateTime: effectiveDate.toISOString(),
-        request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
-        context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
-        performer: profile.resourceType === 'Practitioner' && profile.id
-          ? [{ actor: { reference: `Practitioner/${profile.id}` } }]
-          : undefined,
-        dosage: doseValue || route
-          ? {
-              dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
-              route: route ? { text: route } : undefined,
-            }
-          : undefined,
-        note: noteText ? [{ text: noteText, time: new Date().toISOString(), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
-      }) as MedicationAdministration;
+      const result = await client.post<Parameters>('fhir/R4/MedicationAdministration/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource: {
+          resourceType: 'MedicationAdministration',
+          status: 'completed',
+          ...medicationChoice,
+          subject: { reference: `Patient/${patientId}` },
+          effectiveDateTime: effectiveDate.toISOString(),
+          request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
+          context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+          dosage: doseValue || route
+            ? {
+                dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
+                route: route ? { text: route } : undefined,
+              }
+            : undefined,
+          note: noteText ? [{ text: noteText, time: new Date().toISOString(), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
+        } }],
+      });
+      const administration = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationAdministration | undefined;
+      if (!administration) throw new Error('Server did not return the recorded MedicationAdministration.');
       setMedicationAdministrations((current) => [administration, ...current]);
       setMessage('Đã ghi nhận lần dùng thuốc thực tế.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function markMedicationAdministrationEnteredInError(administration: MedicationAdministration, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!administration.id || administration.status !== 'completed') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('administrationErrorReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const result = await client.post<Parameters>('fhir/R4/MedicationAdministration/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'administration', valueReference: { reference: `MedicationAdministration/${administration.id}` } },
+          { name: 'status', valueCode: 'entered-in-error' },
+          { name: 'reason', valueString: reason },
+        ],
+      });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationAdministration | undefined;
+      if (!updated) throw new Error('Server did not return the corrected MedicationAdministration.');
+      setMedicationAdministrations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã đánh dấu lần dùng thuốc nhập nhầm và giữ dữ liệu gốc trong lịch sử.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -1966,7 +1998,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       <section className="panel">
         <h2>Lịch sử dùng thuốc đã ghi nhận</h2>
         {medicationAdministrations.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Thời điểm</th><th>Thuốc</th><th>Liều</th><th>Đường dùng</th><th>Trạng thái</th><th>Đơn kê</th><th>Lần khám</th><th>Người ghi nhận</th><th>Ghi chú</th></tr></thead>
+          <thead><tr><th>Thời điểm</th><th>Thuốc</th><th>Liều</th><th>Đường dùng</th><th>Trạng thái</th><th>Đơn kê</th><th>Lần khám</th><th>Người ghi nhận</th><th>Ghi chú</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
           <tbody>{medicationAdministrations.map((administration) => {
             const request = medicationRequests.find((item) => administration.request?.reference === `MedicationRequest/${item.id}`);
             const encounter = encounters.find((item) => administration.context?.reference === `Encounter/${item.id}`);
@@ -1982,6 +2014,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : administration.context?.display ?? administration.context?.reference ?? '—'}</td>
                 <td>{administration.performer?.map((performer) => performer.actor?.display ?? performer.actor?.reference).filter(Boolean).join(', ') || '—'}</td>
                 <td>{administration.note?.map((note) => note.text).filter(Boolean).join('; ') || '—'}</td>
+                {role !== 'Patient' && <td>{administration.status === 'completed' ? <details>
+                  <summary>Đánh dấu nhập nhầm</summary>
+                  <form className="editor" onSubmit={(event) => void markMedicationAdministrationEnteredInError(administration, event)}>
+                    <label>Lý do sửa bản ghi<textarea name="administrationErrorReason" maxLength={500} rows={2} required /></label>
+                    <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                  </form>
+                </details> : '—'}</td>}
               </tr>
             );
           })}</tbody>

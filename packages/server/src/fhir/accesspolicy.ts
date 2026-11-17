@@ -168,7 +168,11 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   return accessPolicy;
 }
 
-/** Keeps Condition and Observation writes behind audited lifecycle operations for every project user. */
+const operationManagedClinicalResources = new Set([
+  'AllergyIntolerance', 'Condition', 'Encounter', 'MedicationAdministration', 'MedicationRequest', 'MedicationStatement', 'Observation',
+]);
+
+/** Keeps clinical record writes behind server-side operations for every project user. */
 function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
   const resourcePolicies: AccessPolicyResource[] = [];
   for (const rule of accessPolicy.resource) {
@@ -179,7 +183,7 @@ function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedA
         resourceType,
         criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
       };
-      if (resourceType === 'Condition' || resourceType === 'Observation') {
+      if (operationManagedClinicalResources.has(resourceType)) {
         const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
         scopedRule.readonly = true;
         scopedRule.interaction = interactions.filter((interaction) => !['create', 'update', 'delete'].includes(interaction));
