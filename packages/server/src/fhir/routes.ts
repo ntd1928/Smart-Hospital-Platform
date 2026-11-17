@@ -17,7 +17,7 @@ import {
   appointmentWaitlistHandler,
 } from './operations/appointments';
 import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
-import { encounterCompleteHandler } from './operations/encounters';
+import { encounterAddNoteHandler, encounterCancelHandler, encounterCompleteHandler, encounterRecordHandler, encounterUpdateDetailsHandler } from './operations/encounters';
 import { medicationStatementRecordHandler, medicationStatementUpdateStatusHandler } from './operations/medicationstatement';
 import { medicationRequestRecordHandler, medicationRequestUpdateStatusHandler } from './operations/medicationrequest';
 import { allergyIntoleranceRecordHandler, allergyIntoleranceReviewHandler } from './operations/allergyintolerance';
@@ -85,6 +85,10 @@ router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
 router.add('POST', '/Appointment/$record-outcome', appointmentRecordOutcomeHandler);
 router.add('POST', '/Appointment/$start-encounter', appointmentStartEncounterHandler);
 router.add('POST', '/Encounter/$complete', encounterCompleteHandler);
+router.add('POST', '/Encounter/$record', encounterRecordHandler);
+router.add('POST', '/Encounter/$update-details', encounterUpdateDetailsHandler);
+router.add('POST', '/Encounter/$add-note', encounterAddNoteHandler);
+router.add('POST', '/Encounter/$cancel', encounterCancelHandler);
 router.add('POST', '/MedicationStatement/$record', medicationStatementRecordHandler);
 router.add('POST', '/MedicationStatement/$update-status', medicationStatementUpdateStatusHandler);
 router.add('POST', '/MedicationRequest/$record', medicationRequestRecordHandler);

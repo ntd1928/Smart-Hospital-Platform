@@ -20,10 +20,6 @@ const encounterNoteTypeLabels: Record<string, string> = {
   procedure: 'Thủ thuật',
 };
 
-function formatEncounterNote(type: string, text: string): string {
-  return `[${type}] ${text}`;
-}
-
 function renderEncounterNote(text: string): React.ReactNode {
   const match = /^\[(progress|assessment|plan|procedure)\]\s*/.exec(text);
   return match ? <><strong>{encounterNoteTypeLabels[match[1]]}:</strong> {text.slice(match[0].length)}</> : text;
@@ -213,16 +209,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const encounter = await client.createResource<Encounter>({
-        resourceType: 'Encounter',
-        status: 'in-progress',
-        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
-        subject: { reference: `Patient/${patientId}` },
-        appointment: appointmentId ? [{ reference: `Appointment/${appointmentId}` }] : undefined,
-        period: { start: start.toISOString() },
-        reasonCode: [{ text: reason }],
-        note: clinicalNote ? [{ time: new Date().toISOString(), text: formatEncounterNote(clinicalNoteType, clinicalNote), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
-      });
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'patient', valueReference: { reference: `Patient/${patientId}` } },
+        { name: 'start', valueDateTime: start.toISOString() },
+        { name: 'reason', valueString: reason },
+        { name: 'noteType', valueCode: clinicalNoteType },
+      ];
+      if (appointmentId) parameter.push({ name: 'appointment', valueReference: { reference: `Appointment/${appointmentId}` } });
+      if (clinicalNote) parameter.push({ name: 'note', valueString: clinicalNote });
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$record', { resourceType: 'Parameters', parameter });
+      const encounter = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!encounter) throw new Error('Server did not return the recorded Encounter.');
       setEncounters((current) => [encounter, ...current]);
       setMessage('Đã tạo lần khám.');
       form.reset();
@@ -264,28 +261,31 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function cancelEncounter(encounter: Encounter) {
-    if (!encounter.id || encounter.status !== 'in-progress' || !window.confirm('Hủy lần khám đang mở?')) return;
+  async function cancelEncounter(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!encounter.id || encounter.status !== 'in-progress') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('encounterCancellationReason') ?? '').trim();
+    if (!reason) {
+      setError(new Error('Nhập lý do hủy lần khám.'));
+      return;
+    }
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const end = new Date();
-      if (encounter.period?.start && end < new Date(encounter.period.start)) {
-        throw new Error('Thời điểm kết thúc không thể trước thời điểm bắt đầu.');
-      }
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        status: 'cancelled',
-        period: { ...encounter.period, end: end.toISOString() },
-        note: [...(encounter.note ?? []), {
-          time: end.toISOString(),
-          text: '[cancellation] Lần khám được nhân viên hủy.',
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$cancel', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the cancelled Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã hủy lần khám.');
+      setMessage('Đã hủy lần khám và lưu lý do vào lịch sử.');
+      form.reset();
     } catch (e) {
       setError(e);
     } finally {
@@ -301,27 +301,27 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const startDate = String(data.get('encounterStartDate') ?? '');
     const startTime = String(data.get('encounterStartTime') ?? '');
     const reason = String(data.get('encounterUpdatedReason') ?? '').trim();
+    const changeReason = String(data.get('encounterChangeReason') ?? '').trim();
     const start = new Date(`${startDate}T${startTime}`);
-    if (!reason || !Number.isFinite(start.getTime()) || (encounter.period?.end && start > new Date(encounter.period.end))) {
-      setError(new Error('Nhập lý do và thời gian bắt đầu hợp lệ, không sau thời điểm kết thúc.'));
+    if (!reason || !changeReason || !Number.isFinite(start.getTime()) || (encounter.period?.end && start > new Date(encounter.period.end))) {
+      setError(new Error('Nhập lý do khám, lý do chỉnh sửa và thời gian bắt đầu hợp lệ.'));
       return;
     }
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const previousStart = encounter.period?.start;
-      const previousReason = encounter.reasonCode?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ') ?? '';
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        period: { ...encounter.period, start: start.toISOString() },
-        reasonCode: [{ text: reason }],
-        note: [...(encounter.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Cập nhật thông tin lần khám: thời gian ${previousStart ? new Date(previousStart).toLocaleString('vi-VN') : 'chưa ghi'} → ${start.toLocaleString('vi-VN')}; lý do ${previousReason || 'chưa ghi'} → ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$update-details', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'start', valueDateTime: start.toISOString() },
+          { name: 'reason', valueString: reason },
+          { name: 'changeReason', valueString: changeReason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the updated Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã cập nhật lần khám và lưu lịch sử thay đổi.');
       form.reset();
@@ -344,14 +344,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        note: [...(encounter.note ?? []), {
-          time: new Date().toISOString(),
-          text: formatEncounterNote(type, text),
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$add-note', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'type', valueCode: type },
+          { name: 'text', valueString: text },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the updated Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã bổ sung ghi chú diễn biến.');
       form.reset();
@@ -1722,6 +1724,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <label>Ngày bắt đầu<input name="encounterStartDate" type="date" defaultValue={encounter.period?.start?.slice(0, 10) ?? ''} required /></label>
                       <label>Giờ bắt đầu<input name="encounterStartTime" type="time" defaultValue={encounter.period?.start ? new Date(encounter.period.start).toTimeString().slice(0, 5) : ''} required /></label>
                       <label>Lý do khám<textarea name="encounterUpdatedReason" maxLength={200} defaultValue={encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ')} required /></label>
+                      <label>Lý do chỉnh sửa (bắt buộc)<textarea name="encounterChangeReason" maxLength={500} required /></label>
                       <button className="button" disabled={saving}>Lưu chỉnh sửa</button>
                     </form>
                   </details>
@@ -1749,7 +1752,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <button className="button primary" disabled={saving}>{saving ? 'Đang lưu…' : 'Lưu tổng kết và kết thúc'}</button>
                     </form>
                   </details>{' '}
-                  <button className="button" disabled={saving} onClick={() => void cancelEncounter(encounter)}>Hủy</button>
+                  <details>
+                    <summary>Hủy lần khám</summary>
+                    <form className="editor" onSubmit={(event) => void cancelEncounter(encounter, event)}>
+                      <label>Lý do hủy (bắt buộc)<textarea name="encounterCancellationReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>{saving ? 'Đang hủy…' : 'Xác nhận hủy'}</button>
+                    </form>
+                  </details>
                 </>}</td>}
               </tr>
             ))}</tbody>

@@ -488,7 +488,7 @@ export async function appointmentStartEncounterHandler(req: FhirRequest): Promis
     async (txRepo) => {
       await txRepo.executeRawSql(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`${ctx.project.id}:Encounter:Appointment:${appointmentId}`],
+        [`${ctx.project.id}:Encounter:write:Appointment:${appointmentId}`],
         { resourceTypes: ['Appointment', 'Encounter'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.startEncounterLock' }
       );
       const appointment = await txRepo.readResource<Appointment>('Appointment', appointmentId);
