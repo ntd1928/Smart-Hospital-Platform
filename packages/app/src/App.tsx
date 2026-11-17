@@ -205,6 +205,29 @@ interface RecurringSlotSeries {
 }
 
 const RECURRING_SLOT_RULE_URL = `${RECURRING_SLOT_SERIES_SYSTEM}/rule`;
+const WAITLIST_PREFERENCE_URL = 'urn:smart-hospital:waitlist-preference';
+
+function getLocalCalendarDate(date = new Date()): string {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+function slotMatchesWaitlistPreference(appointment: Appointment, slot: Slot): boolean {
+  const preference = appointment.extension?.find((extension) => extension.url === WAITLIST_PREFERENCE_URL);
+  if (!preference) return true;
+  const startDate = preference.extension?.find((extension) => extension.url === 'start-date')?.valueDate;
+  const endDate = preference.extension?.find((extension) => extension.url === 'end-date')?.valueDate;
+  const timezone = preference.extension?.find((extension) => extension.url === 'timezone')?.valueString;
+  if (!startDate || !endDate || !timezone || !slot.start) return false;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(new Date(slot.start));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const localDate = `${values.year}-${values.month}-${values.day}`;
+    return localDate >= startDate && localDate <= endDate;
+  } catch {
+    return false;
+  }
+}
 
 function readRecurringSlotRules(schedule: Schedule): RecurringSlotSeries[] {
   if (!schedule.id) return [];
@@ -671,7 +694,14 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
       return;
     }
     const form = event.currentTarget;
-    const description = String(new FormData(form).get('waitlistDescription') ?? '').trim();
+    const data = new FormData(form);
+    const description = String(data.get('waitlistDescription') ?? '').trim();
+    const preferredStartDate = String(data.get('waitlistStartDate') ?? '');
+    const preferredEndDate = String(data.get('waitlistEndDate') ?? '');
+    if (Boolean(preferredStartDate) !== Boolean(preferredEndDate)) {
+      setError(new Error('Nhập cả ngày bắt đầu và ngày kết thúc, hoặc để trống cả hai.'));
+      return;
+    }
     setBusy(true);
     setError(undefined);
     setMessage('');
@@ -680,8 +710,15 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
         { name: 'service', valueReference: { reference: `HealthcareService/${selectedPatientService}` } },
       ];
       if (description) parameter.push({ name: 'description', valueString: description });
+      if (preferredStartDate && preferredEndDate) {
+        parameter.push(
+          { name: 'preferredStartDate', valueDate: preferredStartDate },
+          { name: 'preferredEndDate', valueDate: preferredEndDate },
+          { name: 'timezone', valueString: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC' }
+        );
+      }
       await client.post('fhir/R4/Appointment/$waitlist', { resourceType: 'Parameters', parameter });
-      setMessage('Đã ghi nhận yêu cầu chờ cho dịch vụ. Nếu bạn đã có yêu cầu đang chờ cùng dịch vụ, yêu cầu cũ được giữ nguyên.');
+      setMessage('Đã lưu yêu cầu chờ và khoảng ngày mong muốn. Nếu đã có yêu cầu cho dịch vụ này, yêu cầu đó được cập nhật.');
       form.reset();
       setRefresh((value) => value + 1);
     } catch (e) {
@@ -1147,6 +1184,10 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
     ({ practitionerReference }) =>
       practitioners.some((practitioner) => `Practitioner/${practitioner.id}` === practitionerReference && practitioner.active !== false)
   );
+  const selectedPatientWaitlist = patientProfile && selectedPatientService
+    ? appointments.find((appointment) => appointment.status === 'waitlist' && !appointment.start &&
+      appointment.participant?.some((participant) => participant.actor?.reference === `HealthcareService/${selectedPatientService}`))
+    : undefined;
   const displayedRecurringSeries = recurringSeries.filter((series) => {
     const practitionerReference = series.schedule.actor?.find((actor) => actor.reference?.startsWith('Practitioner/'))?.reference;
     return !seriesPractitionerFilter || practitionerReference === `Practitioner/${seriesPractitionerFilter}`;
@@ -1228,16 +1269,20 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
           </div>
         </form>
       )}
-      {!staff && selectedPatientService && availableSlots.length === 0 && (
+      {!staff && selectedPatientService && (availableSlots.length === 0 || selectedPatientWaitlist) && (
         <form className="panel editor" onSubmit={joinWaitlist}>
-          <h2>Đăng ký danh sách chờ</h2>
-          <p className="muted">Đăng ký cho dịch vụ đã chọn. Nhân viên sẽ liên hệ khi có lịch phù hợp.</p>
+          <h2>{selectedPatientWaitlist ? 'Cập nhật yêu cầu chờ' : 'Đăng ký danh sách chờ'}</h2>
+          <p className="muted">Chọn khoảng ngày bạn có thể đến. Nhân viên chỉ ghép lịch nằm trong khoảng ngày đó và dịch vụ đã chọn.</p>
+          <div className="form-grid">
+            <label>Ngày sớm nhất (không bắt buộc)<input name="waitlistStartDate" type="date" min={getLocalCalendarDate()} defaultValue={selectedPatientWaitlist?.extension?.find((extension) => extension.url === WAITLIST_PREFERENCE_URL)?.extension?.find((extension) => extension.url === 'start-date')?.valueDate} /></label>
+            <label>Ngày muộn nhất (không bắt buộc)<input name="waitlistEndDate" type="date" min={getLocalCalendarDate()} defaultValue={selectedPatientWaitlist?.extension?.find((extension) => extension.url === WAITLIST_PREFERENCE_URL)?.extension?.find((extension) => extension.url === 'end-date')?.valueDate} /></label>
+          </div>
           <label>
             Nội dung cần trao đổi (không bắt buộc)
-            <textarea name="waitlistDescription" maxLength={200} rows={2} placeholder="Ví dụ: Có thể đến trong giờ hành chính" />
+            <textarea name="waitlistDescription" maxLength={200} rows={2} defaultValue={selectedPatientWaitlist?.description ?? ''} placeholder="Ví dụ: Có thể đến trong giờ hành chính" />
           </label>
           <div className="form-actions">
-            <button className="button primary" disabled={busy}>{busy ? 'Đang đăng ký…' : 'Vào danh sách chờ'}</button>
+            <button className="button primary" disabled={busy}>{busy ? 'Đang lưu…' : selectedPatientWaitlist ? 'Cập nhật yêu cầu' : 'Vào danh sách chờ'}</button>
           </div>
         </form>
       )}
@@ -1476,9 +1521,16 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                     .map((practitionerRole) => practitionerRole.practitioner?.reference)
                     .filter((reference): reference is string => Boolean(reference)));
                   const waitlistSlots = waitlistService && waitlistService.active !== false
-                    ? availableSlots.filter(({ practitionerReference }) => waitlistPractitioners.has(practitionerReference))
+                    ? availableSlots.filter(({ slot, practitionerReference }) => waitlistPractitioners.has(practitionerReference) && slotMatchesWaitlistPreference(appointment, slot))
                     : [];
                   const isUnscheduledWaitlist = appointment.status === 'waitlist' && !appointment.start;
+                  const waitlistPreference = appointment.extension?.find((extension) => extension.url === WAITLIST_PREFERENCE_URL);
+                  const waitlistStartDate = waitlistPreference?.extension?.find((extension) => extension.url === 'start-date')?.valueDate;
+                  const waitlistEndDate = waitlistPreference?.extension?.find((extension) => extension.url === 'end-date')?.valueDate;
+                  const waitlistTimezone = waitlistPreference?.extension?.find((extension) => extension.url === 'timezone')?.valueString;
+                  const waitlistPreferenceLabel = waitlistStartDate && waitlistEndDate
+                    ? `Ngày mong muốn: ${waitlistStartDate} – ${waitlistEndDate} (${waitlistTimezone})`
+                    : undefined;
                   const canCancel =
                     (!staff && appointment.status === 'waitlist' && !appointment.start) ||
                     (['proposed', 'pending', 'booked', 'waitlist'].includes(appointment.status ?? '') &&
@@ -1513,7 +1565,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                       </td>
                       <td>{practitioner ? personName(practitioner) : practitionerRef ? 'Bác sĩ' : '—'}</td>
                       <td>
-                        {[appointment.serviceType?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', '), appointment.description]
+                        {[appointment.serviceType?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', '), waitlistPreferenceLabel, appointment.description]
                           .filter(Boolean)
                           .join(' · ') || '—'}
                       </td>
@@ -1544,7 +1596,7 @@ function AppointmentPage({ role, profile }: { role: HospitalRole; profile: Patie
                                     })}
                                   </select>
                                 </label>
-                                {waitlistSlots.length === 0 && <p className="muted">Chưa có Slot trống cho bác sĩ được phân công dịch vụ này.</p>}
+                                {waitlistSlots.length === 0 && <p className="muted">Chưa có Slot phù hợp ngày mong muốn và bác sĩ được phân công cho dịch vụ này.</p>}
                                 <button className="button primary" disabled={busy || waitlistSlots.length === 0}>Xác nhận ghép lịch</button>
                               </form>
                             </details>
