@@ -860,7 +860,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       setError(new Error('Chọn bệnh nhân, thuốc, cách dùng và ngày hợp lệ.'));
       return;
     }
-    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken') {
+    if (statusInput !== 'active' && statusInput !== 'completed' && statusInput !== 'stopped' && statusInput !== 'on-hold' && statusInput !== 'not-taken' && statusInput !== 'entered-in-error') {
       setError(new Error('Trạng thái thuốc đang dùng không hợp lệ.'));
       return;
     }
@@ -939,7 +939,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationStatement | undefined;
       if (!updated) throw new Error('Server did not return the updated MedicationStatement.');
       setMedicationStatements((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã cập nhật thuốc trong danh sách đối soát.');
+      setMessage(statusInput === 'entered-in-error' ? 'Đã đánh dấu bản ghi đối soát nhập nhầm và lưu lý do.' : 'Đã cập nhật thuốc trong danh sách đối soát.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -2002,7 +2002,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{sourceLabel}</td>
                 <td>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
                 <td>{statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ') || '—'}</td>
-                <td>{statement.status}</td>
+                <td>{statement.status === 'entered-in-error' ? 'Nhập nhầm' : statement.status}</td>
                 <td>{statement.statusReason?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join('; ') || '—'}</td>
                 <td>{basedOnRequest?.medicationCodeableConcept?.text ?? basedOnRequest?.medicationCodeableConcept?.coding?.[0]?.display ?? statement.basedOn?.map((reference) => reference.display ?? reference.reference).join(', ') ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : statement.context?.display ?? statement.context?.reference ?? '—'}</td>
@@ -2022,7 +2022,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                     <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
                     <button className="button" disabled={saving}>Lưu thay đổi</button>
                   </form>
-                </details> : 'Trạng thái kết thúc · chỉ xem'}</td>}
+                </details> : statement.status === 'entered-in-error' ? 'Bản ghi nhập nhầm · chỉ xem' : 'Trạng thái kết thúc · chỉ xem'}
+                  {statement.status !== 'entered-in-error' && <details>
+                    <summary>Đánh dấu nhập nhầm</summary>
+                    <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
+                      <input type="hidden" name="statementNextStatus" value="entered-in-error" />
+                      <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                    </form>
+                  </details>}
+                </td>}
               </tr>
             );
           })}</tbody>

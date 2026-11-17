@@ -26,6 +26,8 @@ const updateOperation = makeOperationDefinition({ scope: 'type', resource: 'Medi
 
 const validStatuses = ['active', 'completed', 'stopped', 'on-hold', 'not-taken'] as const;
 type StatementStatus = (typeof validStatuses)[number];
+const updateStatuses = [...validStatuses, 'entered-in-error'] as const;
+type StatementUpdateStatus = (typeof updateStatuses)[number];
 
 /** Creates a reconciled medication record after validating patient and linked resources. */
 export async function medicationStatementRecordHandler(req: FhirRequest): Promise<FhirResponse> {
@@ -91,11 +93,11 @@ export async function medicationStatementRecordHandler(req: FhirRequest): Promis
 export async function medicationStatementUpdateStatusHandler(req: FhirRequest): Promise<FhirResponse> {
   const ctx = getAuthenticatedContext();
   const practitionerId = requireStaff(ctx.profile.reference?.reference);
-  const params = parseInputParameters<{ statement: Reference; status: StatementStatus; reason: string }>(updateOperation, req);
+  const params = parseInputParameters<{ statement: Reference; status: StatementUpdateStatus; reason: string }>(updateOperation, req);
   const statementId = getResourceId(params.statement, 'MedicationStatement');
   const reason = params.reason.trim();
   if (!statementId) return [badRequest('A MedicationStatement reference is required.')];
-  if (!validStatuses.includes(params.status)) return [badRequest('MedicationStatement status is invalid.')];
+  if (!updateStatuses.includes(params.status)) return [badRequest('MedicationStatement status is invalid.')];
   if (!reason || reason.length > 500) return [badRequest('A reason of 1–500 characters is required.')];
 
   const statement = await ctx.systemRepo.ensureInTransaction(async (txRepo) => {
@@ -113,10 +115,12 @@ export async function medicationStatementUpdateStatusHandler(req: FhirRequest): 
     if (patient.active === false) throw new OperationOutcomeError(conflict('Cannot reconcile medications for an inactive Patient.'));
     await authorizePatient(txRepo, ctx, patient, practitionerId);
     if (current.status === 'entered-in-error') throw new OperationOutcomeError(conflict('MedicationStatement is marked entered-in-error.'));
-    if (['completed', 'stopped', 'not-taken'].includes(current.status ?? '')) {
-      throw new OperationOutcomeError(conflict('A completed, stopped, or not-taken MedicationStatement cannot be changed. Record a new reconciliation instead.'));
+    if (params.status !== 'entered-in-error') {
+      if (['completed', 'stopped', 'not-taken'].includes(current.status ?? '')) {
+        throw new OperationOutcomeError(conflict('A completed, stopped, or not-taken MedicationStatement cannot be changed. Record a new reconciliation instead.'));
+      }
+      if (params.status === current.status) throw new OperationOutcomeError(conflict('MedicationStatement already has the requested status.'));
     }
-    if (params.status === current.status) throw new OperationOutcomeError(conflict('MedicationStatement already has the requested status.'));
     const now = new Date().toISOString();
     return txRepo.updateResource<MedicationStatement>({
       ...current,
@@ -124,7 +128,9 @@ export async function medicationStatementUpdateStatusHandler(req: FhirRequest): 
       statusReason: [{ text: reason }],
       note: [...(current.note ?? []), {
         time: now,
-        text: `MedicationStatement chuyển từ ${current.status} sang ${params.status}: ${reason}`,
+        text: params.status === 'entered-in-error'
+          ? `MedicationStatement marked entered-in-error; original reconciliation retained. Reason: ${reason}`
+          : `MedicationStatement chuyển từ ${current.status} sang ${params.status}: ${reason}`,
         authorReference: practitionerId ? { reference: `Practitioner/${practitionerId}` } : undefined,
       }],
     }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
