@@ -2055,6 +2055,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <tbody>{filteredMedicationRequests.map((request) => {
             const encounter = encounters.find((item) => request.encounter?.reference === `Encounter/${item.id}`);
             const quantity = request.dispenseRequest?.quantity;
+            const hasRecordedAdministration = medicationAdministrations.some((administration) =>
+              administration.request?.reference === `MedicationRequest/${request.id}` && administration.status !== 'entered-in-error'
+            );
             return (
               <tr key={request.id}>
                 <td>{request.authoredOn ? new Date(request.authoredOn).toLocaleDateString('vi-VN') : '—'}</td>
@@ -2080,13 +2083,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <button className="button" disabled={saving}>Lưu trạng thái</button>
                     </form>
                   </details>}
-                  {request.status !== 'entered-in-error' && <details>
+                  {request.status !== 'entered-in-error' && !hasRecordedAdministration && <details>
                     <summary>Đánh dấu nhập nhầm</summary>
                     <form className="editor" onSubmit={(event) => void markMedicationRequestEnteredInError(request, event)}>
                       <label>Lý do<textarea name="medicationEntryErrorReason" maxLength={500} rows={2} required /></label>
                       <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
                     </form>
                   </details>}
+                  {request.status !== 'entered-in-error' && hasRecordedAdministration && <small>Đã có lần dùng thuốc liên kết; hãy sửa bản ghi dùng thuốc trước nếu cũng được nhập nhầm.</small>}
                 </td>}
               </tr>
             );

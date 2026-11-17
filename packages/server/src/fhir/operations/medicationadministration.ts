@@ -70,6 +70,11 @@ export async function medicationAdministrationRecordHandler(req: FhirRequest): P
       const requestId = getId(input.request, 'MedicationRequest');
       if (input.request && !requestId) throw new OperationOutcomeError(badRequest('The medication request reference is invalid.'));
       if (requestId) {
+        await txRepo.executeRawSql(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`${ctx.project.id}:MedicationRequest:${requestId}`],
+          { resourceTypes: ['MedicationRequest'], operation: 'write', mode: DatabaseMode.WRITER, source: 'medicationadministration.requestLock' }
+        );
         const request = await txRepo.readResource<MedicationRequest>('MedicationRequest', requestId);
         verifyProject(request.meta?.project, ctx.project.id);
         if (request.subject?.reference !== `Patient/${patientId}` || request.status !== 'active') {

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import { allOk, badRequest, conflict, forbidden, OperationOutcomeError } from '@medplum/core';
+import { allOk, badRequest, conflict, forbidden, OperationOutcomeError, Operator } from '@medplum/core';
 import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
-import type { AllergyIntolerance, Encounter, MedicationRequest, Patient, Practitioner, Reference } from '@medplum/fhirtypes';
+import type { AllergyIntolerance, Encounter, MedicationAdministration, MedicationRequest, Patient, Practitioner, Reference } from '@medplum/fhirtypes';
 import { getAuthenticatedContext } from '../../context';
 import { DatabaseMode } from '../../database';
 import { makeOperationDefinition } from './definitions';
@@ -127,6 +127,23 @@ export async function medicationRequestUpdateStatusHandler(req: FhirRequest): Pr
     if (params.status !== 'entered-in-error' && current.status !== 'active') {
       throw new OperationOutcomeError(conflict('Only an active MedicationRequest can be stopped, cancelled, or completed.'));
     }
+    if (params.status === 'entered-in-error') {
+      let hasValidAdministration = false;
+      await txRepo.processAllResources<MedicationAdministration>(
+        {
+          resourceType: 'MedicationAdministration',
+          filters: [{ code: 'request', operator: Operator.EQUALS, value: `MedicationRequest/${requestId}` }],
+        },
+        async (administration) => {
+          if (administration.meta?.project === ctx.project.id && administration.request?.reference === `MedicationRequest/${requestId}` && administration.status !== 'entered-in-error') {
+            hasValidAdministration = true;
+          }
+        }
+      );
+      if (hasValidAdministration) {
+        throw new OperationOutcomeError(conflict('This MedicationRequest has a recorded medication administration and cannot be marked entered-in-error. Correct the administration first if it was also entered in error.'));
+      }
+    }
     const at = new Date().toISOString();
     const description = params.status === 'entered-in-error'
       ? `Yêu cầu thuốc được đánh dấu nhập nhầm; dữ liệu kê đơn được giữ để truy vết. Lý do: ${reason}`
@@ -137,7 +154,7 @@ export async function medicationRequestUpdateStatusHandler(req: FhirRequest): Pr
       statusReason: { text: reason },
       note: [...(current.note ?? []), { time: at, text: description, authorReference: { reference: `Practitioner/${practitionerId}` } }],
     }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
-  }, { resourceTypes: ['MedicationRequest', 'Patient', 'Practitioner'], source: 'medicationrequest.updateStatus' });
+  }, { resourceTypes: ['MedicationRequest', 'MedicationAdministration', 'Patient', 'Practitioner'], source: 'medicationrequest.updateStatus' });
   return [allOk, buildOutputParameters(updateOperation, { return: request })];
 }
 
