@@ -10,6 +10,7 @@ Base URL `http://localhost:8103`; API bảo vệ dùng Authorization: Bearer tok
 | POST /oauth2/token                            | Đổi code PKCE hoặc refresh token              |
 | GET /auth/me                                  | Profile, membership, policy và cấu hình phiên |
 | POST /oauth2/logout                           | Thu hồi phiên                                 |
+| GET /fhir/R4/metadata                         | CapabilityStatement phản ánh read/search/history cho resource lâm sàng operation-managed; không quảng cáo CRUD ghi trực tiếp |
 | POST /admin/projects/:projectId/invite        | Admin tạo tài khoản/profile/membership        |
 | GET /fhir/R4/Patient?name=An                  | Admin xem toàn project; Doctor chỉ tìm Patient được gán qua generalPractitioner; Patient xem compartment cá nhân |
 | POST /fhir/R4/Patient                         | Admin tạo hồ sơ; Doctor không có quyền tạo Patient |

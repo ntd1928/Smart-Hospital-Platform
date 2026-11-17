@@ -4,6 +4,7 @@ import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
 import { Router } from 'express';
 import { getAuthenticatedContext } from '../context';
 import { authenticateRequest } from '../oauth/middleware';
+import { OPERATION_MANAGED_CLINICAL_RESOURCES } from './clinical-resources';
 import {
   appointmentAvailableHandler,
   appointmentBookHandler,
@@ -59,7 +60,7 @@ fhirRouter.get('/metadata', (_req, res) =>
   res.json({
     resourceType: 'CapabilityStatement',
     status: 'active',
-    date: '2026-10-22',
+    date: new Date().toISOString().slice(0, 10),
     kind: 'instance',
     fhirVersion: '4.0.1',
     format: ['json'],
@@ -67,12 +68,12 @@ fhirRouter.get('/metadata', (_req, res) =>
       {
         mode: 'server',
         interaction: [{ code: 'transaction' }],
-        resource: SUPPORTED_FHIR_RESOURCES.map((type) => ({
-          type,
-          interaction: ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'].map(
-            (code) => ({ code })
-          ),
-        })),
+        resource: SUPPORTED_FHIR_RESOURCES.map((type) => {
+          const interactions = OPERATION_MANAGED_CLINICAL_RESOURCES.has(type)
+            ? ['read', 'search-type', 'history-instance', 'vread']
+            : ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'];
+          return { type, interaction: interactions.map((code) => ({ code })) };
+        }),
       },
     ],
   })

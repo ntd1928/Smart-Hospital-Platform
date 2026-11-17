@@ -31,6 +31,7 @@ import type { AuthState } from '../oauth/middleware';
 import type { SystemRepository } from './repo';
 import { getGlobalSystemRepo, getProjectSystemRepo, Repository } from './repo';
 import { PLACEHOLDER_SHARD_ID } from './sharding';
+import { OPERATION_MANAGED_CLINICAL_RESOURCES } from './clinical-resources';
 import { applySmartScopes } from './smart';
 
 export type PopulatedAccessPolicy = AccessPolicy & { resource: AccessPolicyResource[] };
@@ -168,10 +169,6 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   return accessPolicy;
 }
 
-const operationManagedClinicalResources = new Set([
-  'AllergyIntolerance', 'Condition', 'Encounter', 'MedicationAdministration', 'MedicationRequest', 'MedicationStatement', 'Observation',
-]);
-
 /** Keeps clinical record writes behind server-side operations for every project user. */
 function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
   const resourcePolicies: AccessPolicyResource[] = [];
@@ -183,7 +180,7 @@ function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedA
         resourceType,
         criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
       };
-      if (operationManagedClinicalResources.has(resourceType)) {
+      if (OPERATION_MANAGED_CLINICAL_RESOURCES.has(resourceType)) {
         const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
         scopedRule.readonly = true;
         scopedRule.interaction = interactions.filter((interaction) => !['create', 'update', 'delete'].includes(interaction));
