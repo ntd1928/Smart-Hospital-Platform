@@ -1,4 +1,4 @@
-# Kiến trúc tuần 5–6
+# Kiến trúc Smart Hospital Platform
 
 ```mermaid
 flowchart TD
@@ -14,6 +14,8 @@ flowchart TD
 ```
 
 Backend là bản tách modular monolith Medplum. Chế độ demo chạy toàn bộ stack Docker: Nginx phục vụ SPA build bằng Vite, API Node, PostgreSQL và Redis. Seed chạy một lần trước API, chờ database/cache healthy; API chờ seed thành công, web chờ API healthy. Dữ liệu nằm trong named volumes, không bake vào image. Chế độ phát triển có thể chạy API/Vite trên host, chỉ database/cache trong Docker. Chưa triển khai cloud hoặc worker nghiệp vụ. Xem [Docker](../development/DOCKER.md).
+
+AWS staging baseline nằm trong `infra/aws` và được mô tả bởi CDK; chưa có stack hosted. Khi triển khai, Route 53 trỏ hai hostname HTTPS tới cùng ALB. ALB định tuyến hostname ứng dụng và API tới hai ECS/Fargate service chạy trong private subnets. API kết nối PostgreSQL RDS và Redis trong isolated subnets. S3 bucket riêng đã được khai báo nhưng chưa được nối vào Binary storage; backend hiện vẫn dùng filesystem. Xem [AWS CDK](../../infra/aws/README.md).
 
 ## Dữ liệu
 
@@ -42,6 +44,6 @@ Ma trận là phạm vi demo/UI; backend thực thi policy upstream, không có 
 
 1. Tách backend cần thiết và dùng SDK/component npm để hạn chế phần phải bảo trì.
 2. Giữ FHIR API và auth upstream, không thêm bảng User hoặc CRUD REST song song.
-3. Docker Compose chạy toàn bộ stack demo và build image local; chưa publish registry hoặc triển khai cloud.
+3. Docker Compose chạy toàn bộ stack demo local. AWS CDK mô tả một staging baseline nhưng chưa có deploy hosted hay CI/CD.
 4. Project demo bật validate-terminology để từ chối code FHIR không hợp lệ.
 5. Tất cả dữ liệu demo giả lập, chỉ dùng localhost.

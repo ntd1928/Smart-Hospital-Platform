@@ -1,8 +1,10 @@
 # Context dùng chung
 
-Smart Hospital Platform là đồ án môn Phát triển ứng dụng điện toán đám mây. Đợt hiện tại chỉ thực hiện tuần 5–6, tái sử dụng phần cần thiết của Medplum 5.2.7 (upstream commit dbaac8c2e). Repo nhóm không phải toàn bộ monorepo upstream.
+Smart Hospital Platform là đồ án môn Phát triển ứng dụng điện toán đám mây. Repo tái sử dụng phần cần thiết của Medplum 5.2.7 (upstream commit dbaac8c2e), bổ sung Appointment/Schedule/Slot, EHR nền tảng và AWS CDK staging baseline. Repo nhóm không phải toàn bộ monorepo upstream; AWS stack chưa được deploy.
 
 ## Kiến trúc hiện tại
+
+AWS CDK staging baseline nằm trong `infra/aws`: ECS/Fargate cho API và web, một ALB HTTPS, RDS PostgreSQL, Redis có TLS, bucket S3 riêng, Route 53 và CloudWatch. Đây mới là code hạ tầng; chưa deploy và chưa có CI/CD. S3 bucket chưa được tích hợp với Binary storage hoặc luồng upload/download của ứng dụng. Xem [hướng dẫn AWS](../../infra/aws/README.md).
 
 React/TypeScript/Vite tại packages/app → SDK @medplum/core → Express/auth/FHIR repository tại packages/server → PostgreSQL 16 và Redis 7. Thư viện Medplum dùng phiên bản cố định 5.2.7. API localhost:8103; web localhost:3000.
 
@@ -39,6 +41,3 @@ Credentials demo chỉ phục vụ localhost và runner CI dùng dữ liệu gi�
 EHR ghi dấu hiệu sinh tồn thành Observation theo mã LOINC và UCUM; huyết áp dùng component tâm thu/tâm trương. `$record` kiểm tra Patient/Encounter/assignment và ghi 1–100 Observation cùng transaction server-side; `$update` khóa resource, chỉ cho amended hoặc entered-in-error với lý do bắt buộc và actor audit. Practitioner, Patient và Admin không ghi Observation trực tiếp qua FHIR CRUD; Patient chỉ đọc qua compartment. Bảng lịch sử có lọc trạng thái để xem riêng kết quả nhập nhầm; dashboard và danh sách gần đây không tính kết quả đó vào kết quả hợp lệ.
 
 Staff và Patient có thể tải tóm tắt hồ sơ thành FHIR R4 document Bundle với Composition preliminary đứng đầu, LOINC 34133-9 và section liên kết bằng fullUrl tới tài nguyên đã tải theo quyền hiện tại. Bản xuất JSON không tải thêm dữ liệu, không attestation và không thay hồ sơ nguồn.
-
-
-

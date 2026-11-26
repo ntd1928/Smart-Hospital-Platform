@@ -4,6 +4,8 @@ Upstream: https://github.com/medplum/medplum, commit `dbaac8c2e13c3fb2b61059d413
 
 ## Tái sử dụng
 
+AWS CDK baseline riêng trong `infra/aws` được điều chỉnh từ các construct/pattern trong `medplum/packages/cdk` tại upstream commit `9cefcc93856c171cfacc630c7e8a66905919809f` (Medplum 5.2.14). Baseline này dùng Docker target và cấu hình của Smart Hospital; không nâng dependency runtime của ứng dụng khỏi 5.2.7, và không mang theo Medplum Bots hoặc workers.
+
 Source backend gồm auth/password/PKCE/token/logout, project/membership/policy, PostgreSQL repository, tìm kiếm, lookup, validation, audit, Redis cache, schema migration và seed FHIR definitions. SDK/core, fhir-router, definitions, fhirtypes và React components dùng dependency npm 5.2.7 được khóa trong package-lock, không nhập toàn bộ monorepo.
 
 Frontend khởi tạo theo mẫu Medplum app: MedplumClient, provider, Mantine, router; SignInForm dùng component upstream. Nhóm bổ sung dashboard, trang quản lý và cấu hình cho phạm vi đồ án. Manifest ghi file có đối ứng upstream và hash để kiểm tra nguồn gốc.

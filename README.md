@@ -1,6 +1,6 @@
 # Smart Hospital Platform
 
-Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại hỗ trợ đăng nhập, phân quyền, quản lý tài khoản/hồ sơ bệnh nhân và tạo/hủy lịch hẹn cơ bản trên FHIR API.
+Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại hỗ trợ đăng nhập, phân quyền, quản lý hồ sơ, lịch Appointment/Schedule/Slot và hồ sơ lâm sàng cơ bản trên FHIR API.
 
 Frontend React/TypeScript kết nối backend Node.js, PostgreSQL và Redis. Toàn bộ ứng dụng có thể chạy bằng Docker Compose; GitHub Actions được cấu hình kiểm tra chất lượng, build và kiểm thử tích hợp. Chưa triển khai lên cloud.
 
@@ -23,6 +23,10 @@ docker compose stop
 ```
 
 `stop` giữ container và volume. Dùng lại lệnh `up` ở trên để chạy tiếp. Không dùng `down -v` nếu cần giữ dữ liệu. Khi sửa code, chạy lại `up --build` để cập nhật image. Xem [hướng dẫn Docker](docs/development/DOCKER.md) và [demo 10–15 phút](docs/reports/DEMO.md).
+
+## AWS staging infrastructure
+
+`infra/aws` chứa AWS CDK baseline cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và một S3 bucket riêng. Cấu hình deploy, chi phí và giới hạn hiện tại nằm trong [hướng dẫn AWS](infra/aws/README.md). Đây mới là Infrastructure as Code; chưa có deploy hoặc CI/CD hosted. S3 bucket chưa được nối với luồng Binary của ứng dụng.
 
 ## Chạy source để phát triển — tùy chọn
 
@@ -71,9 +75,10 @@ Backend bootstrap còn có tài khoản super-admin upstream; không dùng tài 
 - Đăng nhập/logout/phiên và phân quyền bằng backend thật; dashboard ba vai trò dùng FHIR API.
 - Danh sách, tìm kiếm, thêm, xem, sửa, xóa mềm Patient; quản lý Practitioner cơ bản.
 - Admin tạo tài khoản local, khóa/mở membership; Patient giới hạn compartment của mình.
-- Appointment API cơ bản; Docker PostgreSQL/Redis; unit/API/E2E và tài liệu khảo sát LLM/RAG.
+- Appointment/Schedule/Slot có kiểm tra trùng lịch; EHR nền tảng với các resource lâm sàng chính.
+- Docker PostgreSQL/Redis, unit/API/E2E và AWS CDK staging baseline.
 
-Chưa có workflow lịch khám/chống trùng lịch, EHR/lịch sử khám, S3, chatbot hoạt động hoặc cloud. Schema/definitions dùng chung không chứng minh các module đó đã triển khai.
+Chưa có EHR lifecycle đầy đủ, upload/download tài liệu qua S3, AI assistant runtime hoặc môi trường cloud đã triển khai. S3 trong CDK mới là bucket hạ tầng; ứng dụng hiện vẫn dùng filesystem cho Binary storage.
 
 ## Kiểm thử
 
@@ -84,7 +89,7 @@ npx playwright install chromium
 npm run verify
 ```
 
-Verify chạy typecheck (cả seed/test), lint mã nhóm, format check, unit test, build, API integration và E2E. API test tạo/xóa dữ liệu tạm và kiểm tra quyền trực tiếp. E2E tự chạy Vite nếu cổng 3000 chưa được dùng. Chỉ chạy integration với database demo local.
+Verify chạy typecheck (cả seed/test), lint mã nhóm, format check, unit test, build, API integration, E2E và AWS CDK typecheck/template/synthesis. API test tạo/xóa dữ liệu tạm và kiểm tra quyền trực tiếp. E2E tự chạy Vite nếu cổng 3000 chưa được dùng. Chỉ chạy integration với database demo local.
 
 Với stack Docker đang chạy, kiểm tra API không cần Node trên host:
 

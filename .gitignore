@@ -13,3 +13,6 @@ test-results/
 artifacts/local/
 .local/
 /medplum/
+/infra/aws/cdk.config.json
+/infra/aws/cdk.context.json
+/infra/aws/cdk.out/
