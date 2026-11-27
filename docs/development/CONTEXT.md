@@ -4,7 +4,7 @@ Smart Hospital Platform là đồ án môn Phát triển ứng dụng điện to
 
 ## Kiến trúc hiện tại
 
-AWS CDK staging baseline nằm trong `infra/aws`: ECS/Fargate cho API và web, một ALB HTTPS, RDS PostgreSQL, Redis có TLS, bucket S3 riêng, Route 53 và CloudWatch. API Binary storage dùng S3 trên stack AWS với IAM chỉ cho prefix `binary/*`; local/Docker giữ filesystem. Đây mới là code hạ tầng; chưa deploy và chưa có CI/CD. Chưa có giao diện upload/download tài liệu. Xem [hướng dẫn AWS](../../infra/aws/README.md).
+AWS CDK staging baseline nằm trong `infra/aws`: ECS/Fargate cho API và web, một ALB HTTPS, RDS PostgreSQL, Redis có TLS, bucket S3 riêng, Route 53 và CloudWatch. Upload FHIR Binary stream qua API vào S3; API cấp URL tải S3 có thời hạn. Task role giới hạn vào prefix `binary/*`, CORS giới hạn theo hostname app. Local/Docker giữ filesystem và signed `/storage` route. Đây mới là code hạ tầng; chưa deploy, chưa có CI/CD hoặc giao diện tài liệu. Xem [hướng dẫn AWS](../../infra/aws/README.md).
 
 React/TypeScript/Vite tại packages/app → SDK @medplum/core → Express/auth/FHIR repository tại packages/server → PostgreSQL 16 và Redis 7. Thư viện Medplum dùng phiên bản cố định 5.2.7. API localhost:8103; web localhost:3000.
 

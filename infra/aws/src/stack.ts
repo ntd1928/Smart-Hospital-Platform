@@ -156,6 +156,15 @@ export class SmartHospitalInfraStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       versioned: true,
+      cors: [
+        {
+          allowedOrigins: [`https://${appDomainName}`],
+          allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.HEAD, s3.HttpMethods.PUT],
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+          maxAge: Duration.hours(1).toSeconds(),
+        },
+      ],
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -246,7 +255,7 @@ export class SmartHospitalInfraStack extends Stack {
       environment: {
         MEDPLUM_BASE_URL: apiBaseUrl,
         MEDPLUM_APP_BASE_URL: appBaseUrl,
-        MEDPLUM_STORAGE_BASE_URL: `${apiBaseUrl}storage/`,
+        MEDPLUM_STORAGE_BASE_URL: `https://${storageBucket.bucketRegionalDomainName}/binary/`,
         MEDPLUM_BINARY_STORAGE: `s3:${storageBucket.bucketName}`,
         MEDPLUM_PORT: '8103',
         MEDPLUM_DATABASE_HOST: database.dbInstanceEndpointAddress,

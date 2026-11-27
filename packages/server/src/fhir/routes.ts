@@ -28,6 +28,7 @@ import { projectInitHandler } from './operations/projectinit';
 import { sendFhirResponse } from './response';
 
 export const SUPPORTED_FHIR_RESOURCES = [
+  'Binary',
   'Patient',
   'Practitioner',
   'PractitionerRole',
@@ -69,6 +70,12 @@ fhirRouter.get('/metadata', (_req, res) =>
         mode: 'server',
         interaction: [{ code: 'transaction' }],
         resource: SUPPORTED_FHIR_RESOURCES.map((type) => {
+          if (type === 'Binary') {
+            return {
+              type,
+              interaction: ['read', 'create', 'update', 'delete', 'history-instance', 'vread'].map((code) => ({ code })),
+            };
+          }
           const interactions = OPERATION_MANAGED_CLINICAL_RESOURCES.has(type)
             ? ['read', 'search-type', 'history-instance', 'vread']
             : ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'];

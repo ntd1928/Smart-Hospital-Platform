@@ -9,6 +9,20 @@
       "sourceSha256": "674d06c4c1cd755166c87e504fba0d89338869364a9c3f56e42253ff79466617",
       "integratedSha256": "674d06c4c1cd755166c87e504fba0d89338869364a9c3f56e42253ff79466617",
       "status": "Source file copied unchanged; integrated with the project's storage loader and ECS configuration."
+    },
+    {
+      "sourcePath": "packages/server/src/fhir/binary.ts",
+      "integratedPath": "packages/server/src/fhir/binary.ts",
+      "sourceSha256": "599937109a174363c2fcd64b6ee707b8d354de5b90fc68e66333733d721572d9",
+      "integratedSha256": "599937109a174363c2fcd64b6ee707b8d354de5b90fc68e66333733d721572d9",
+      "status": "Source file copied unchanged; mounted before body parsers to stream FHIR Binary content."
+    },
+    {
+      "sourcePath": "packages/server/src/storage/routes.ts",
+      "integratedPath": "packages/server/src/storage/routes.ts",
+      "sourceSha256": "0f4beb7304a754a8897f5e8abf511bc2d3a99fc9cc6f104aa20e4c1509783190",
+      "integratedSha256": "cde9ae8d01e7b9cc0e8dbee527bd31af41314ab8d5e8b00b4a19c020d4f0a08b",
+      "status": "Imported from Medplum 5.2.14 and adapted to load the requested Binary version for versioned signed URLs."
     }
   ]
 }

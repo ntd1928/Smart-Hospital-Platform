@@ -10,6 +10,7 @@ import { loadConfig } from './config/loader';
 import type { ServerConfig } from './config/utils';
 import { attachRequestContext, closeRequestContext } from './context';
 import { closeDatabase, initDatabase } from './database';
+import { binaryRouter } from './fhir/binary';
 import { fhirRouter } from './fhir/routes';
 import { loadStructureDefinitions } from './fhir/structure';
 import { healthcheckHandler, cleanupReservedDatabaseConnections } from './healthcheck';
@@ -19,6 +20,7 @@ import { oauthRouter } from './oauth/routes';
 import { closeRedis, initRedis } from './redis';
 import { seedDatabase } from './seed';
 import { initBinaryStorage } from './storage/loader';
+import { storageRouter } from './storage/routes';
 import { Operator } from '@medplum/core';
 import { getGlobalSystemRepo } from './fhir/repo';
 
@@ -39,11 +41,11 @@ export async function initApp(app: Express, config: ServerConfig): Promise<http.
     res.set('Cache-Control', 'no-store');
     next();
   });
-  app.use(
-    json({ limit: '1mb', type: ['application/json', 'application/*+json'] }),
-    urlencoded({ extended: false }),
-    attachRequestContext
-  );
+  app.use(attachRequestContext);
+  // These routes must precede body parsers to preserve raw binary upload streams.
+  app.use('/fhir/R4/Binary', binaryRouter);
+  app.use('/storage', storageRouter);
+  app.use(json({ limit: '1mb', type: ['application/json', 'application/*+json'] }), urlencoded({ extended: false }));
   app.get('/healthcheck', healthcheckHandler);
   app.get('/config/public', async (_req, res) => {
     const project = await getGlobalSystemRepo().searchOne({

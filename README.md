@@ -26,7 +26,7 @@ docker compose stop
 
 ## AWS staging infrastructure
 
-`infra/aws` chứa AWS CDK cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và S3 Binary storage. API ECS dùng task role giới hạn vào prefix `binary/*`; cấu hình local/Docker vẫn lưu Binary trên filesystem. Cấu hình deploy, backup/restore, chi phí và giới hạn nằm trong [hướng dẫn AWS](infra/aws/README.md). Hạ tầng chưa được deploy và chưa có CI/CD hosted.
+`infra/aws` chứa AWS CDK cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và S3 Binary storage. API ECS dùng task role giới hạn vào prefix `binary/*`; upload Binary chạy qua FHIR API, còn download dùng URL S3 có thời hạn và CORS giới hạn theo hostname app. Local/Docker vẫn lưu Binary trên filesystem. Cấu hình deploy, backup/restore, chi phí và giới hạn nằm trong [hướng dẫn AWS](infra/aws/README.md). Hạ tầng chưa được deploy và chưa có CI/CD hosted.
 
 ## Chạy source để phát triển — tùy chọn
 
