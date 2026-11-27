@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { normalizeErrorString } from '@medplum/core';
 import type { Binary } from '@medplum/fhirtypes';
+import { S3Storage } from '../cloud/aws/storage';
 import { getConfig } from '../config/loader';
 import { getLogger } from '../logger';
 import type { PresignedUrlOptions } from './base';
@@ -12,7 +13,9 @@ import type { BinaryStorage } from './types';
 let binaryStorage: BinaryStorage | undefined = undefined;
 
 export function initBinaryStorage(type?: string): void {
-  if (type?.startsWith('file:')) {
+  if (type?.startsWith('s3:')) {
+    binaryStorage = new S3Storage(type.replace('s3:', ''));
+  } else if (type?.startsWith('file:')) {
     binaryStorage = new FileSystemStorage(type.replace('file:', ''));
   } else {
     binaryStorage = undefined;

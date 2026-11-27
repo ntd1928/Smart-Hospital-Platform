@@ -52,6 +52,6 @@ Nếu đủ thời gian: tạo một Patient có tên riêng, chạy `docker com
 
 ## 6. Kết luận đúng phạm vi — 1 phút
 
-Đã có auth/session, phân quyền cơ bản, dashboard, Patient Management, quản lý tài khoản/bác sĩ cơ bản, Appointment API cơ bản và môi trường Docker. AI mới có khảo sát LLM/RAG; chưa có chatbot chạy thật. Chưa có workflow đặt khám/chống trùng lịch, lịch sử khám EHR, S3/cloud hoặc monitoring. Resource version history không phải lịch sử khám bệnh.
+Đã có auth/session, phân quyền cơ bản, dashboard, Patient Management, lịch Appointment/Schedule/Slot, hồ sơ EHR nền tảng và môi trường Docker. AI mới có khảo sát LLM/RAG; chưa có chatbot chạy thật. FHIR Binary API có thể lưu payload qua S3 trên stack AWS; CDK và backend S3 chưa được deploy, chưa có giao diện tài liệu hoặc CloudWatch dashboard. Resource version history không phải lịch sử khám bệnh.
 
 Auth/FHIR/repository kế thừa Medplum; phần tích hợp, giao diện, cấu hình, dữ liệu và kiểm thử được tổ chức cho đồ án. CI chỉ tuyên bố đạt trên GitHub khi có hosted run thực tế, không dùng kết quả local làm bằng chứng cho cloud.

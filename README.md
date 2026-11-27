@@ -26,7 +26,7 @@ docker compose stop
 
 ## AWS staging infrastructure
 
-`infra/aws` chứa AWS CDK baseline cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và một S3 bucket riêng. Cấu hình deploy, chi phí và giới hạn hiện tại nằm trong [hướng dẫn AWS](infra/aws/README.md). Đây mới là Infrastructure as Code; chưa có deploy hoặc CI/CD hosted. S3 bucket chưa được nối với luồng Binary của ứng dụng.
+`infra/aws` chứa AWS CDK cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và S3 Binary storage. API ECS dùng task role giới hạn vào prefix `binary/*`; cấu hình local/Docker vẫn lưu Binary trên filesystem. Cấu hình deploy, backup/restore, chi phí và giới hạn nằm trong [hướng dẫn AWS](infra/aws/README.md). Hạ tầng chưa được deploy và chưa có CI/CD hosted.
 
 ## Chạy source để phát triển — tùy chọn
 
@@ -78,7 +78,7 @@ Backend bootstrap còn có tài khoản super-admin upstream; không dùng tài 
 - Appointment/Schedule/Slot có kiểm tra trùng lịch; EHR nền tảng với các resource lâm sàng chính.
 - Docker PostgreSQL/Redis, unit/API/E2E và AWS CDK staging baseline.
 
-Chưa có EHR lifecycle đầy đủ, upload/download tài liệu qua S3, AI assistant runtime hoặc môi trường cloud đã triển khai. S3 trong CDK mới là bucket hạ tầng; ứng dụng hiện vẫn dùng filesystem cho Binary storage.
+Chưa có EHR lifecycle đầy đủ, giao diện upload/download tài liệu, AI assistant runtime hoặc môi trường cloud đã triển khai. FHIR Binary API có thể lưu payload trong S3 khi chạy trên stack AWS; local và Docker tiếp tục dùng filesystem.
 
 ## Kiểm thử
 

@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/medplum/medplum",
+  "commit": "9cefcc93856c171cfacc630c7e8a66905919809f",
+  "packageVersion": "5.2.14",
+  "files": [
+    {
+      "sourcePath": "packages/server/src/cloud/aws/storage.ts",
+      "integratedPath": "packages/server/src/cloud/aws/storage.ts",
+      "sourceSha256": "674d06c4c1cd755166c87e504fba0d89338869364a9c3f56e42253ff79466617",
+      "integratedSha256": "674d06c4c1cd755166c87e504fba0d89338869364a9c3f56e42253ff79466617",
+      "status": "Source file copied unchanged; integrated with the project's storage loader and ECS configuration."
+    }
+  ]
+}

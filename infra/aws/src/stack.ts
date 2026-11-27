@@ -56,6 +56,7 @@ export class SmartHospitalInfraStack extends Stack {
       ipAddresses: ec2.IpAddresses.cidr('10.40.0.0/16'),
       availabilityZones: config.availabilityZones,
       natGateways: 1,
+      gatewayEndpoints: { S3: { service: ec2.GatewayVpcEndpointAwsService.S3 } },
       subnetConfiguration: [
         { name: 'Public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
         { name: 'Application', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 24 },
@@ -230,6 +231,8 @@ export class SmartHospitalInfraStack extends Stack {
     });
 
     const apiTask = new ecs.FargateTaskDefinition(this, 'ApiTask', { cpu: 512, memoryLimitMiB: 1024 });
+    storageBucket.grantReadWrite(apiTask.taskRole, 'binary/*');
+    storageBucket.grantDelete(apiTask.taskRole, 'binary/*');
     const apiContainer = apiTask.addContainer('ApiContainer', {
       image: ecs.ContainerImage.fromDockerImageAsset(
         new ecrAssets.DockerImageAsset(this, 'ApiImage', {
@@ -244,6 +247,7 @@ export class SmartHospitalInfraStack extends Stack {
         MEDPLUM_BASE_URL: apiBaseUrl,
         MEDPLUM_APP_BASE_URL: appBaseUrl,
         MEDPLUM_STORAGE_BASE_URL: `${apiBaseUrl}storage/`,
+        MEDPLUM_BINARY_STORAGE: `s3:${storageBucket.bucketName}`,
         MEDPLUM_PORT: '8103',
         MEDPLUM_DATABASE_HOST: database.dbInstanceEndpointAddress,
         MEDPLUM_DATABASE_PORT: database.dbInstanceEndpointPort,

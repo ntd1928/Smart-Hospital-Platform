@@ -15,7 +15,7 @@ flowchart TD
 
 Backend là bản tách modular monolith Medplum. Chế độ demo chạy toàn bộ stack Docker: Nginx phục vụ SPA build bằng Vite, API Node, PostgreSQL và Redis. Seed chạy một lần trước API, chờ database/cache healthy; API chờ seed thành công, web chờ API healthy. Dữ liệu nằm trong named volumes, không bake vào image. Chế độ phát triển có thể chạy API/Vite trên host, chỉ database/cache trong Docker. Chưa triển khai cloud hoặc worker nghiệp vụ. Xem [Docker](../development/DOCKER.md).
 
-AWS staging baseline nằm trong `infra/aws` và được mô tả bởi CDK; chưa có stack hosted. Khi triển khai, Route 53 trỏ hai hostname HTTPS tới cùng ALB. ALB định tuyến hostname ứng dụng và API tới hai ECS/Fargate service chạy trong private subnets. API kết nối PostgreSQL RDS và Redis trong isolated subnets. S3 bucket riêng đã được khai báo nhưng chưa được nối vào Binary storage; backend hiện vẫn dùng filesystem. Xem [AWS CDK](../../infra/aws/README.md).
+AWS staging baseline nằm trong `infra/aws` và được mô tả bởi CDK; chưa có stack hosted. Khi triển khai, Route 53 trỏ hai hostname HTTPS tới cùng ALB. ALB định tuyến hostname ứng dụng và API tới hai ECS/Fargate service chạy trong private subnets. API kết nối PostgreSQL RDS và Redis trong isolated subnets. FHIR Binary payloads đi qua storage routes của API rồi được lưu trong bucket S3 riêng; task role chỉ đọc/ghi/xóa object dưới `binary/*`. Local/Docker vẫn dùng filesystem và app chưa có giao diện tài liệu. Xem [AWS CDK](../../infra/aws/README.md).
 
 ## Dữ liệu
 
