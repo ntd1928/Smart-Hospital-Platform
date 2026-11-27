@@ -14,6 +14,7 @@ export interface RecurringSlotInput {
   startTime: string;
   endTime: string;
   weekdays: number[];
+  timeZone: string;
 }
 
 export interface SlotInterval {
@@ -41,9 +42,33 @@ export function groupRecurringSlotSeries(slots: Slot[]): RecurringSlotSeries[] {
   }));
 }
 
-/** Expands a local time range into dated intervals for selected weekdays. */
+function localDateTimeInZone(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  formatter: Intl.DateTimeFormat
+): Date | undefined {
+  const target = Date.UTC(year, month - 1, day, hour, minute);
+  let timestamp = target;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const fields = Object.fromEntries(formatter.formatToParts(new Date(timestamp)).map((part) => [part.type, Number(part.value)]));
+    const localAsUtc = Date.UTC(fields.year, fields.month - 1, fields.day, fields.hour, fields.minute);
+    const difference = target - localAsUtc;
+    if (difference === 0) break;
+    timestamp += difference;
+  }
+  const fields = Object.fromEntries(formatter.formatToParts(new Date(timestamp)).map((part) => [part.type, Number(part.value)]));
+  if (fields.year !== year || fields.month !== month || fields.day !== day || fields.hour !== hour || fields.minute !== minute) {
+    return undefined;
+  }
+  return new Date(timestamp);
+}
+
+/** Expands local calendar dates/times in an explicit IANA timezone. */
 export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInterval[] {
-  const { startDate, endDate, startTime, endTime, weekdays } = input;
+  const { startDate, endDate, startTime, endTime, weekdays, timeZone } = input;
   if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) return [];
   const firstDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
   const lastDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
@@ -62,18 +87,34 @@ export function expandRecurringSlotIntervals(input: RecurringSlotInput): SlotInt
   if (startHour > 23 || endHour > 23 || startMinute > 59 || endMinute > 59) return [];
   const selectedWeekdays = new Set(weekdays.filter((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6));
   if (selectedWeekdays.size === 0) return [];
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    });
+  } catch {
+    return [];
+  }
 
   const results: SlotInterval[] = [];
-  const cursor = new Date(firstDate);
-  while (cursor <= lastDate) {
-    if (selectedWeekdays.has(cursor.getDay())) {
-      const start = new Date(cursor);
-      start.setHours(startHour, startMinute, 0, 0);
-      const end = new Date(cursor);
-      end.setHours(endHour, endMinute, 0, 0);
-      if (end > start) results.push({ start, end });
+  const cursor = new Date(Date.UTC(firstDate.getFullYear(), firstDate.getMonth(), firstDate.getDate()));
+  const finalDate = new Date(Date.UTC(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate()));
+  while (cursor <= finalDate) {
+    const year = cursor.getUTCFullYear();
+    const month = cursor.getUTCMonth() + 1;
+    const day = cursor.getUTCDate();
+    if (selectedWeekdays.has(cursor.getUTCDay())) {
+      const start = localDateTimeInZone(year, month, day, startHour, startMinute, formatter);
+      const end = localDateTimeInZone(year, month, day, endHour, endMinute, formatter);
+      if (start && end && end > start) results.push({ start, end });
     }
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return results;
 }

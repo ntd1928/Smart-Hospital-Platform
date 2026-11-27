@@ -2,7 +2,7 @@
 
 Mục tiêu cuối kỳ: Smart Hospital Platform chạy trên AWS với 7 module (xác thực, bệnh nhân, lịch khám, bệnh án, tài liệu y tế, trợ lý AI, vận hành cloud), kèm source code, tài liệu triển khai, báo cáo và demo. Kiến trúc nằm ở [ARCHITECTURE](architecture/ARCHITECTURE.md).
 
-Trạng thái dưới đây ghi theo code đã merge vào `main`, không theo báo cáo tiến độ. Cập nhật bảng khi một tuần được merge và kiểm thử.
+Trạng thái dưới đây ghi theo code đã merge vào `main`, không theo báo cáo tiến độ. Phân biệt code, kiểm tra và deploy; không gọi là hoàn tất nếu chưa có bằng chứng tương ứng.
 
 ## Lộ trình
 
@@ -10,33 +10,34 @@ Trạng thái dưới đây ghi theo code đã merge vào `main`, không theo b�
 | ---- | ------------------------------------------------------------------------ | -------------------------------------------------- | ----------------------------------------- |
 | 5    | Frontend, backend, PostgreSQL, Redis, Docker; đăng nhập; khảo sát AI     | Chạy local, dashboard, tài liệu kiến trúc và AI    | Xong                                      |
 | 6    | Authentication, Authorization; Patient/Practitioner FHIR; CRUD, tìm kiếm | Module tài khoản và bệnh nhân, API test            | Xong                                      |
-| 7    | Appointment FHIR: đặt, sửa, hủy, theo dõi; xử lý trùng lịch              | Module lịch khám, Docker image, test nghiệp vụ     | Xong phần nhân viên; còn bệnh nhân tự đặt |
-| 8    | EHR: Encounter, Condition, Observation; S3; cloud staging                | Module bệnh án, upload/download, bản staging       | Chưa bắt đầu                              |
+| 7    | Appointment FHIR: đặt, sửa, hủy, theo dõi; xử lý trùng lịch              | Module lịch khám, Docker image, test nghiệp vụ     | Đã có booking Patient, lịch lặp và kiểm tra trùng; còn ngoại lệ/ngày lễ |
+| 8    | EHR: Encounter, Condition, Observation; S3; cloud staging                | Module bệnh án, upload/download, bản staging       | EHR nền tảng và S3 Binary API đã có; giao diện tài liệu/staging chưa có |
 | 9    | Pipeline tài liệu, embedding, vector search, RAG, chatbot                | AI Assistant, kết quả đánh giá ban đầu             | Mới có tài liệu khảo sát                  |
-| 10   | AI đọc hồ sơ qua FHIR theo quyền; tích hợp toàn hệ thống; E2E            | Bản tích hợp đầy đủ, kết quả E2E                   | Chưa bắt đầu                              |
-| 11   | AWS EC2/ECS, RDS, S3, Redis; Terraform hoặc CDK; HTTPS, secrets; backup  | Hệ thống trên AWS, cấu hình IaC, tài liệu hạ tầng  | Chưa bắt đầu                              |
-| 12   | CI/CD GitHub Actions; CloudWatch; load, API, security test               | Pipeline CD, dashboard giám sát, báo cáo hiệu năng | Đã có CI; chưa có CD                      |
+| 10   | AI đọc hồ sơ qua FHIR theo quyền; tích hợp toàn hệ thống; E2E            | Bản tích hợp đầy đủ, kết quả E2E                   | EHR tích hợp nền tảng; AI và E2E chưa có   |
+| 11   | AWS EC2/ECS, RDS, S3, Redis; Terraform hoặc CDK; HTTPS, secrets; backup  | Hệ thống trên AWS, cấu hình IaC, tài liệu hạ tầng  | CDK staging và S3 Binary đã có; chưa deploy hoặc thử restore |
+| 12   | CI/CD GitHub Actions; CloudWatch; load, API, security test               | Pipeline CD, dashboard giám sát, báo cáo hiệu năng | Có CI và CloudWatch IaC cơ bản; CD/dashboard/test tải còn thiếu |
 | 13   | Sửa lỗi, kiểm thử hồi quy, tối ưu, hoàn thiện tài liệu                   | Bản ổn định, tài liệu kỹ thuật                     | Chưa bắt đầu                              |
 | 14   | Nghiệm thu, báo cáo, slide, video demo, dữ liệu mẫu                      | Bản cuối trên cloud, hồ sơ bàn giao                | Chưa bắt đầu                              |
 
-## Chi tiết đã có (tuần 5–7)
+## Chi tiết đã có (tuần 5–11)
 
 - Đăng nhập PKCE, phiên, logout thu hồi Login; phân quyền Admin/Doctor/Patient bằng AccessPolicy upstream.
 - Admin mời tài khoản, khóa/mở membership; CRUD, tìm kiếm, xóa mềm Patient; quản lý Practitioner cơ bản.
-- Schedule/Slot FHIR; Admin/Doctor đặt lịch từ Slot trống và tạo Slot một lần; hủy lịch trả Slot về trống.
-- Repository chặn lịch trùng giờ của cùng Practitioner, khóa theo Practitioner khi ghi, giới hạn trạng thái được hủy.
-- Docker Compose toàn stack, seed idempotent, CI chạy quality + integration; unit, API và E2E test.
+- Schedule/Slot FHIR; Patient đặt/hủy/đổi lịch cơ bản; staff tạo Slot một lần và lịch lặp; có waitlist date preference và các thao tác hủy/đổi series.
+- Repository chặn lịch trùng theo Practitioner, Slot/Schedule validation, khóa ghi đồng thời và giới hạn hủy.
+- Encounter, Condition, Observation, MedicationRequest, MedicationStatement, MedicationAdministration và AllergyIntolerance có API/lifecycle nền tảng; EHR page hỗ trợ ghi và Patient đọc lịch sử.
+- AWS CDK khai báo ECS/Fargate, RDS, Redis, S3, HTTPS/DNS, Secrets Manager, backup cơ bản và CloudWatch; S3 Binary storage nối vào API task role.
+- Docker Compose chạy local; CI có quality và integration workflow. AWS stack chưa deploy; lần làm việc này không chạy test.
 
-Còn thiếu so với kế hoạch tuần 5–7: bệnh nhân tự đặt lịch, lịch lặp cho Schedule, giới hạn Doctor theo bệnh nhân được phân công, giao diện quản lý bác sĩ đầy đủ.
+Phần còn thiếu: xử lý ngoại lệ/ngày lễ cho lịch lặp, giao diện quản lý tài liệu, AI runtime, cloud deployment, restore drill và CD/monitoring vận hành.
 
-## Tuần 8: việc cần làm
+## Tuần 8: trạng thái và phần còn lại
 
-1. Mở Encounter, Condition, Observation trong `SUPPORTED_FHIR_RESOURCES`; kiểm tra quyền Doctor/Patient bằng API test.
-2. Giao diện bác sĩ ghi lần khám, chẩn đoán, kết quả; màn hình lịch sử bệnh án cho Doctor và Patient.
-3. Liên kết Encounter với Appointment đã khám.
-4. Lưu tài liệu lên S3: chọn resource FHIR cho metadata, API cấp URL có thời hạn, kiểm tra quyền trước khi cấp.
-5. Dựng môi trường staging đầu tiên; ghi cách dựng vào `docs/development`.
-6. Cập nhật [API](architecture/API.md), [ARCHITECTURE](architecture/ARCHITECTURE.md), [CONTEXT](development/CONTEXT.md) và bảng lộ trình.
+1. Encounter, Condition và Observation đã mở qua FHIR API; EHR UI hỗ trợ ghi/đọc cơ bản. Vòng đời lâm sàng đầy đủ vẫn còn thiếu.
+2. Encounter có thể liên kết Appointment đã hoàn tất; Doctor ghi và Patient đọc theo policy/compartment.
+3. S3 Binary backend/API và bucket staging được khai báo; giao diện tài liệu chưa có.
+4. AWS staging IaC và hướng dẫn nằm ở `infra/aws`; stack chưa deploy và chưa có kết quả restore thật.
+5. [API](architecture/API.md), [ARCHITECTURE](architecture/ARCHITECTURE.md), [CONTEXT](development/CONTEXT.md) và hướng dẫn AWS đã cập nhật.
 
 ## Tiêu chí nghiệm thu
 

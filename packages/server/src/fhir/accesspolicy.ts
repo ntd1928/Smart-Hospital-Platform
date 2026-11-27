@@ -31,6 +31,7 @@ import type { AuthState } from '../oauth/middleware';
 import type { SystemRepository } from './repo';
 import { getGlobalSystemRepo, getProjectSystemRepo, Repository } from './repo';
 import { PLACEHOLDER_SHARD_ID } from './sharding';
+import { OPERATION_MANAGED_CLINICAL_RESOURCES } from './clinical-resources';
 import { applySmartScopes } from './smart';
 
 export type PopulatedAccessPolicy = AccessPolicy & { resource: AccessPolicyResource[] };
@@ -163,8 +164,31 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   // This includes ensuring no admin rights for non-admins
   // and restricted access for admins
   accessPolicy = applyProjectAdminAccessPolicy(project, membership, accessPolicy);
+  accessPolicy = restrictClinicalWrites(accessPolicy);
 
   return accessPolicy;
+}
+
+/** Keeps clinical record writes behind server-side operations for every project user. */
+function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
+  const resourcePolicies: AccessPolicyResource[] = [];
+  for (const rule of accessPolicy.resource) {
+    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
+    for (const resourceType of resourceTypes) {
+      const scopedRule: AccessPolicyResource = {
+        ...rule,
+        resourceType,
+        criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
+      };
+      if (OPERATION_MANAGED_CLINICAL_RESOURCES.has(resourceType)) {
+        const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
+        scopedRule.readonly = true;
+        scopedRule.interaction = interactions.filter((interaction) => !['create', 'update', 'delete'].includes(interaction));
+      }
+      resourcePolicies.push(scopedRule);
+    }
+  }
+  return { ...accessPolicy, resource: resourcePolicies };
 }
 
 const practitionerPatientCriteria: Record<string, string[]> = {
@@ -206,7 +230,7 @@ function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, 
       };
       if (scopedSearchParameters) {
         scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
-        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance') {
+        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance' || resourceType === 'Condition' || resourceType === 'Observation') {
           scopedRule.readonly = true;
           const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
           scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');
@@ -246,7 +270,7 @@ function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, p
     const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
     for (const resourceType of resourceTypes) {
       if (resourceType !== 'Patient') {
-        const readonlyClinicalResources = ['AllergyIntolerance', 'MedicationRequest', 'MedicationStatement'];
+        const readonlyClinicalResources = ['AllergyIntolerance', 'Condition', 'MedicationRequest', 'MedicationStatement', 'Observation'];
         resourcePolicies.push({
           ...rule,
           resourceType,

@@ -20,9 +20,15 @@ const encounterNoteTypeLabels: Record<string, string> = {
   procedure: 'Thủ thuật',
 };
 
-function formatEncounterNote(type: string, text: string): string {
-  return `[${type}] ${text}`;
-}
+const medicationAdministrationStatusLabels: Record<string, string> = {
+  completed: 'Đã dùng',
+  'not-done': 'Không thực hiện',
+  'entered-in-error': 'Nhập nhầm',
+  'in-progress': 'Đang thực hiện',
+  'on-hold': 'Tạm giữ',
+  stopped: 'Đã dừng',
+  unknown: 'Không rõ',
+};
 
 function renderEncounterNote(text: string): React.ReactNode {
   const match = /^\[(progress|assessment|plan|procedure)\]\s*/.exec(text);
@@ -62,12 +68,21 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
   const [conditionVerificationStatus, setConditionVerificationStatus] = useState('');
   const [observationSearch, setObservationSearch] = useState('');
   const [observationCategory, setObservationCategory] = useState('');
+  const [observationStatus, setObservationStatus] = useState('');
   const [observationFrom, setObservationFrom] = useState('');
   const [observationTo, setObservationTo] = useState('');
   const [medicationSearch, setMedicationSearch] = useState('');
   const [medicationStatusFilter, setMedicationStatusFilter] = useState('');
   const [medicationFrom, setMedicationFrom] = useState('');
   const [medicationTo, setMedicationTo] = useState('');
+  const [statementSearch, setStatementSearch] = useState('');
+  const [statementStatusFilter, setStatementStatusFilter] = useState('');
+  const [statementFrom, setStatementFrom] = useState('');
+  const [statementTo, setStatementTo] = useState('');
+  const [administrationSearch, setAdministrationSearch] = useState('');
+  const [administrationStatusFilter, setAdministrationStatusFilter] = useState('');
+  const [administrationFrom, setAdministrationFrom] = useState('');
+  const [administrationTo, setAdministrationTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -213,16 +228,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const encounter = await client.createResource<Encounter>({
-        resourceType: 'Encounter',
-        status: 'in-progress',
-        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code: 'AMB', display: 'ambulatory' },
-        subject: { reference: `Patient/${patientId}` },
-        appointment: appointmentId ? [{ reference: `Appointment/${appointmentId}` }] : undefined,
-        period: { start: start.toISOString() },
-        reasonCode: [{ text: reason }],
-        note: clinicalNote ? [{ time: new Date().toISOString(), text: formatEncounterNote(clinicalNoteType, clinicalNote), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
-      });
+      const parameter: NonNullable<Parameters['parameter']> = [
+        { name: 'patient', valueReference: { reference: `Patient/${patientId}` } },
+        { name: 'start', valueDateTime: start.toISOString() },
+        { name: 'reason', valueString: reason },
+        { name: 'noteType', valueCode: clinicalNoteType },
+      ];
+      if (appointmentId) parameter.push({ name: 'appointment', valueReference: { reference: `Appointment/${appointmentId}` } });
+      if (clinicalNote) parameter.push({ name: 'note', valueString: clinicalNote });
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$record', { resourceType: 'Parameters', parameter });
+      const encounter = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!encounter) throw new Error('Server did not return the recorded Encounter.');
       setEncounters((current) => [encounter, ...current]);
       setMessage('Đã tạo lần khám.');
       form.reset();
@@ -264,28 +280,31 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function cancelEncounter(encounter: Encounter) {
-    if (!encounter.id || encounter.status !== 'in-progress' || !window.confirm('Hủy lần khám đang mở?')) return;
+  async function cancelEncounter(encounter: Encounter, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!encounter.id || encounter.status !== 'in-progress') return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('encounterCancellationReason') ?? '').trim();
+    if (!reason) {
+      setError(new Error('Nhập lý do hủy lần khám.'));
+      return;
+    }
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const end = new Date();
-      if (encounter.period?.start && end < new Date(encounter.period.start)) {
-        throw new Error('Thời điểm kết thúc không thể trước thời điểm bắt đầu.');
-      }
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        status: 'cancelled',
-        period: { ...encounter.period, end: end.toISOString() },
-        note: [...(encounter.note ?? []), {
-          time: end.toISOString(),
-          text: '[cancellation] Lần khám được nhân viên hủy.',
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$cancel', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the cancelled Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã hủy lần khám.');
+      setMessage('Đã hủy lần khám và lưu lý do vào lịch sử.');
+      form.reset();
     } catch (e) {
       setError(e);
     } finally {
@@ -301,27 +320,27 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const startDate = String(data.get('encounterStartDate') ?? '');
     const startTime = String(data.get('encounterStartTime') ?? '');
     const reason = String(data.get('encounterUpdatedReason') ?? '').trim();
+    const changeReason = String(data.get('encounterChangeReason') ?? '').trim();
     const start = new Date(`${startDate}T${startTime}`);
-    if (!reason || !Number.isFinite(start.getTime()) || (encounter.period?.end && start > new Date(encounter.period.end))) {
-      setError(new Error('Nhập lý do và thời gian bắt đầu hợp lệ, không sau thời điểm kết thúc.'));
+    if (!reason || !changeReason || !Number.isFinite(start.getTime()) || (encounter.period?.end && start > new Date(encounter.period.end))) {
+      setError(new Error('Nhập lý do khám, lý do chỉnh sửa và thời gian bắt đầu hợp lệ.'));
       return;
     }
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const previousStart = encounter.period?.start;
-      const previousReason = encounter.reasonCode?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ') ?? '';
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        period: { ...encounter.period, start: start.toISOString() },
-        reasonCode: [{ text: reason }],
-        note: [...(encounter.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Cập nhật thông tin lần khám: thời gian ${previousStart ? new Date(previousStart).toLocaleString('vi-VN') : 'chưa ghi'} → ${start.toLocaleString('vi-VN')}; lý do ${previousReason || 'chưa ghi'} → ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$update-details', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'start', valueDateTime: start.toISOString() },
+          { name: 'reason', valueString: reason },
+          { name: 'changeReason', valueString: changeReason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the updated Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã cập nhật lần khám và lưu lịch sử thay đổi.');
       form.reset();
@@ -344,14 +363,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Encounter>({
-        ...encounter,
-        note: [...(encounter.note ?? []), {
-          time: new Date().toISOString(),
-          text: formatEncounterNote(type, text),
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Encounter/$add-note', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'encounter', valueReference: { reference: `Encounter/${encounter.id}` } },
+          { name: 'type', valueCode: type },
+          { name: 'text', valueString: text },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Encounter | undefined;
+      if (!updated) throw new Error('Server did not return the updated Encounter.');
       setEncounters((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã bổ sung ghi chú diễn biến.');
       form.reset();
@@ -378,7 +399,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     try {
       const encounterId = String(data.get('conditionEncounter') ?? '');
       const verificationStatus = String(data.get('conditionVerificationStatus') ?? 'confirmed');
-      const condition = await client.createResource<Condition>({
+      const result = await client.post<Parameters>('fhir/R4/Condition/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource: {
         resourceType: 'Condition',
         clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'active' }] },
         verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: verificationStatus }] },
@@ -387,7 +410,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
         onsetDateTime: onsetDate ? new Date(`${onsetDate}T00:00:00`).toISOString() : undefined,
         recordedDate: new Date().toISOString(),
+        } }],
       });
+      const condition = result.parameter?.find((item) => item.name === 'return')?.resource as Condition | undefined;
+      if (!condition) throw new Error('Server did not return the recorded Condition.');
       setConditions((current) => [condition, ...current]);
       setMessage('Đã lưu chẩn đoán.');
       form.reset();
@@ -398,82 +424,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     }
   }
 
-  async function confirmCondition(condition: Condition) {
-    const status = condition.verificationStatus?.coding?.[0]?.code;
-    if (!condition.id || !['provisional', 'unconfirmed', 'differential'].includes(status ?? '')) return;
-    setSaving(true);
-    setError(undefined);
-    setMessage('');
-    try {
-      const updated = await client.updateResource<Condition>({
-        ...condition,
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'confirmed' }] },
-      });
-      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã xác nhận chẩn đoán.');
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function updateConditionClinicalStatus(condition: Condition, status: 'active' | 'inactive' | 'resolved', event: FormEvent<HTMLFormElement>) {
+  async function reviewCondition(condition: Condition, change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved' | 'entered-in-error', event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const currentStatus = condition.clinicalStatus?.coding?.[0]?.code;
-    if (!condition.id || (status === 'active' ? currentStatus !== 'inactive' : currentStatus !== 'active')) return;
-    const data = new FormData(event.currentTarget);
-    const reason = String(data.get('conditionStatusReason') ?? '').trim();
-    if (!reason) return;
-    setSaving(true);
-    setError(undefined);
-    setMessage('');
-    try {
-      const updated = await client.updateResource<Condition>({
-        ...condition,
-        clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: status }] },
-        ...(status === 'resolved' ? { abatementDateTime: new Date().toISOString() } : status === 'active' ? { abatementDateTime: undefined } : {}),
-        note: [...(condition.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Trạng thái chẩn đoán chuyển sang ${status}: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
-      });
-      setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã cập nhật trạng thái chẩn đoán và lưu lý do.');
-      (event.currentTarget as HTMLFormElement).reset();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setSaving(false);
+    if (!condition.id) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const reason = String(data.get('conditionReviewReason') ?? '').trim();
+    if (!reason) {
+      setError(new Error('Nhập lý do cập nhật chẩn đoán.'));
+      return;
     }
-  }
-
-  async function refuteCondition(condition: Condition, event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!condition.id || ['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')) return;
-    const data = new FormData(event.currentTarget);
-    const reason = String(data.get('conditionRefutationReason') ?? '').trim();
-    if (!reason) return;
     setSaving(true);
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Condition>({
-        ...condition,
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-ver-status', code: 'refuted' }] },
-        clinicalStatus: condition.clinicalStatus?.coding?.[0]?.code === 'active'
-          ? { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/condition-clinical', code: 'inactive' }] }
-          : condition.clinicalStatus,
-        note: [...(condition.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Chẩn đoán bị bác bỏ: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Condition/$review', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'condition', valueReference: { reference: `Condition/${condition.id}` } },
+          { name: 'change', valueCode: change },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Condition | undefined;
+      if (!updated) throw new Error('Server did not return the reviewed Condition.');
       setConditions((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã bác bỏ chẩn đoán và lưu lý do.');
-      (event.currentTarget as HTMLFormElement).reset();
+      setMessage(`Đã cập nhật chẩn đoán (${change}) và lưu lý do.`);
+      form.reset();
     } catch (e) {
       setError(e);
     } finally {
@@ -500,16 +477,21 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('observationEncounter') ?? '');
-      const observation = await client.createResource<Observation>({
-        resourceType: 'Observation',
-        status: 'final',
-        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category, display: observationCategoryLabels[category] ?? category }] }],
-        code: { text: code },
-        subject: { reference: `Patient/${patientId}` },
-        encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
-        effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
-        ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined } } : { valueString: textValue }),
+      const result = await client.post<Parameters>('fhir/R4/Observation/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource: {
+          resourceType: 'Observation',
+          status: 'final',
+          category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: category, display: observationCategoryLabels[category] ?? category }] }],
+          code: { text: code },
+          subject: { reference: `Patient/${patientId}` },
+          encounter: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+          effectiveDateTime: effectiveDateTime ? new Date(effectiveDateTime).toISOString() : new Date().toISOString(),
+          ...(numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined } } : { valueString: textValue }),
+        } }],
       });
+      const observation = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!observation) throw new Error('Server did not return the recorded Observation.');
       setObservations((current) => [observation, ...current]);
       setMessage('Đã lưu kết quả.');
       form.reset();
@@ -581,11 +563,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      await client.post('fhir/R4', {
-        resourceType: 'Bundle',
-        type: 'transaction',
-        entry: observations.map((observation) => ({ resource: observation, request: { method: 'POST', url: 'Observation' } })),
+      const result = await client.post<Parameters>('fhir/R4/Observation/$record', {
+        resourceType: 'Parameters',
+        parameter: observations.map((observation) => ({ name: 'resource', resource: observation })),
       });
+      const created = result.parameter?.filter((item) => item.name === 'return').map((item) => item.resource as Observation) ?? [];
+      if (created.length !== observations.length) throw new Error('Server did not return every recorded Observation.');
       const latest: Observation[] = [];
       for await (const page of client.searchResourcePages('Observation', { patient: `Patient/${patientId}`, _count: '100', _sort: '-date' })) latest.push(...page);
       setObservations(latest);
@@ -628,25 +611,30 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Observation>({
-        ...observation,
-        status: 'amended',
-        code: isBloodPressure ? observation.code : { text: code },
-        effectiveDateTime: new Date(dateTime).toISOString(),
-        ...(isBloodPressure ? {
-          component: observation.component?.map((component) => {
-            const coding = component.code.coding?.[0];
-            if (coding?.code === '8480-6') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(systolicValue) } };
-            if (coding?.code === '8462-4') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(diastolicValue) } };
-            return component;
-          }),
-        } : numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
-        note: [...(observation.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Kết quả được sửa: ${previousValue} → ${nextValue}. Lý do: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Observation/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'observation', valueReference: { reference: `Observation/${observation.id}` } },
+          { name: 'action', valueCode: 'amend' },
+          { name: 'reason', valueString: reason },
+          { name: 'resource', resource: {
+            ...observation,
+            status: 'amended',
+            code: isBloodPressure ? observation.code : { text: code },
+            effectiveDateTime: new Date(dateTime).toISOString(),
+            ...(isBloodPressure ? {
+              component: observation.component?.map((component) => {
+                const coding = component.code.coding?.[0];
+                if (coding?.code === '8480-6') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(systolicValue) } };
+                if (coding?.code === '8462-4') return { ...component, valueQuantity: { ...component.valueQuantity, value: Number(diastolicValue) } };
+                return component;
+              }),
+            } : numericValue ? { valueQuantity: { value: Number(numericValue), unit: unit || undefined }, valueString: undefined } : { valueString: textValue, valueQuantity: undefined }),
+          } },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!updated) throw new Error('Server did not return the amended Observation.');
       setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã sửa kết quả và lưu lý do vào ghi chú audit.');
       form.reset();
@@ -674,15 +662,16 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setError(undefined);
     setMessage('');
     try {
-      const updated = await client.updateResource<Observation>({
-        ...observation,
-        status: 'entered-in-error',
-        note: [...(observation.note ?? []), {
-          time: new Date().toISOString(),
-          text: `Kết quả được đánh dấu nhập nhầm; dữ liệu gốc được giữ để truy vết. Lý do: ${reason}`,
-          authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined,
-        }],
+      const result = await client.post<Parameters>('fhir/R4/Observation/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'observation', valueReference: { reference: `Observation/${observation.id}` } },
+          { name: 'action', valueCode: 'entered-in-error' },
+          { name: 'reason', valueString: reason },
+        ],
       });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as Observation | undefined;
+      if (!updated) throw new Error('Server did not return the updated Observation.');
       setObservations((current) => current.map((item) => item.id === updated.id ? updated : item));
       setMessage('Đã đánh dấu kết quả nhập nhầm và lưu lý do.');
       form.reset();
@@ -767,6 +756,8 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const form = event.currentTarget;
     const data = new FormData(form);
     const requestId = String(data.get('administrationRequest') ?? '');
+    const outcomeInput = String(data.get('administrationOutcome') ?? 'completed');
+    const outcome = outcomeInput === 'not-done' ? 'not-done' : 'completed';
     const request = medicationRequests.find((item) => item.id === requestId);
     const enteredMedication = String(data.get('administrationMedication') ?? '').trim();
     const medicationConcept = request?.medicationCodeableConcept;
@@ -783,8 +774,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const effective = String(data.get('administrationTime') ?? '');
     const effectiveDate = new Date(effective);
     const noteText = String(data.get('administrationNote') ?? '').trim();
-    if (!patientId || (!enteredMedication && !hasMedicationConcept && !request?.medicationReference?.reference) || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || !Number.isFinite(effectiveDate.getTime()) || effectiveDate.getTime() > Date.now()) {
-      setError(new Error('Chọn bệnh nhân, thuốc, thời điểm đã dùng và liều dùng hợp lệ.'));
+    const statusReason = String(data.get('administrationNotDoneReason') ?? '').trim();
+    if (!patientId || (!enteredMedication && !hasMedicationConcept && !request?.medicationReference?.reference) || !['completed', 'not-done'].includes(outcomeInput) || (!!doseValue !== !!doseUnit) || (doseValue && (!Number.isFinite(Number(doseValue)) || Number(doseValue) <= 0)) || !Number.isFinite(effectiveDate.getTime()) || effectiveDate.getTime() > Date.now() || (outcome === 'not-done' && (!statusReason || doseValue || route))) {
+      setError(new Error('Chọn bệnh nhân, thuốc, thời điểm hợp lệ; liều không được thực hiện cần lý do và không có liều/đường dùng đã ghi nhận.'));
       return;
     }
     setSaving(true);
@@ -792,27 +784,60 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage('');
     try {
       const encounterId = String(data.get('administrationEncounter') ?? '');
-      const administration = await client.post('fhir/R4/MedicationAdministration/$record', {
-        resourceType: 'MedicationAdministration',
-        status: 'completed',
-        ...medicationChoice,
-        subject: { reference: `Patient/${patientId}` },
-        effectiveDateTime: effectiveDate.toISOString(),
-        request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
-        context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
-        performer: profile.resourceType === 'Practitioner' && profile.id
-          ? [{ actor: { reference: `Practitioner/${profile.id}` } }]
-          : undefined,
-        dosage: doseValue || route
-          ? {
-              dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
-              route: route ? { text: route } : undefined,
-            }
-          : undefined,
-        note: noteText ? [{ text: noteText, time: new Date().toISOString(), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
-      }) as MedicationAdministration;
+      const result = await client.post<Parameters>('fhir/R4/MedicationAdministration/$record', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'resource', resource: {
+          resourceType: 'MedicationAdministration',
+          status: outcome,
+          statusReason: outcome === 'not-done' ? { text: statusReason } : undefined,
+          ...medicationChoice,
+          subject: { reference: `Patient/${patientId}` },
+          effectiveDateTime: effectiveDate.toISOString(),
+          request: requestId ? { reference: `MedicationRequest/${requestId}` } : undefined,
+          context: encounterId ? { reference: `Encounter/${encounterId}` } : undefined,
+          dosage: outcome === 'completed' && (doseValue || route)
+            ? {
+                dose: doseValue ? { value: Number(doseValue), unit: doseUnit } : undefined,
+                route: route ? { text: route } : undefined,
+              }
+            : undefined,
+          note: noteText ? [{ text: noteText, time: new Date().toISOString(), authorReference: profile.id ? { reference: `Practitioner/${profile.id}` } : undefined }] : undefined,
+        } }],
+      });
+      const administration = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationAdministration | undefined;
+      if (!administration) throw new Error('Server did not return the recorded MedicationAdministration.');
       setMedicationAdministrations((current) => [administration, ...current]);
-      setMessage('Đã ghi nhận lần dùng thuốc thực tế.');
+      setMessage(outcome === 'not-done' ? 'Đã ghi nhận liều thuốc không được thực hiện cùng lý do.' : 'Đã ghi nhận lần dùng thuốc thực tế.');
+      form.reset();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function markMedicationAdministrationEnteredInError(administration: MedicationAdministration, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!administration.id || !['completed', 'not-done'].includes(administration.status ?? '')) return;
+    const form = event.currentTarget;
+    const reason = String(new FormData(form).get('administrationErrorReason') ?? '').trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(undefined);
+    setMessage('');
+    try {
+      const result = await client.post<Parameters>('fhir/R4/MedicationAdministration/$update', {
+        resourceType: 'Parameters',
+        parameter: [
+          { name: 'administration', valueReference: { reference: `MedicationAdministration/${administration.id}` } },
+          { name: 'status', valueCode: 'entered-in-error' },
+          { name: 'reason', valueString: reason },
+        ],
+      });
+      const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationAdministration | undefined;
+      if (!updated) throw new Error('Server did not return the corrected MedicationAdministration.');
+      setMedicationAdministrations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage('Đã đánh dấu lần dùng thuốc nhập nhầm và giữ dữ liệu gốc trong lịch sử.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -918,7 +943,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       const updated = result.parameter?.find((item) => item.name === 'return')?.resource as MedicationStatement | undefined;
       if (!updated) throw new Error('Server did not return the updated MedicationStatement.');
       setMedicationStatements((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setMessage('Đã cập nhật thuốc trong danh sách đối soát.');
+      setMessage(statusInput === 'entered-in-error' ? 'Đã đánh dấu bản ghi đối soát nhập nhầm và lưu lý do.' : 'Đã cập nhật thuốc trong danh sách đối soát.');
       form.reset();
     } catch (e) {
       setError(e);
@@ -1072,7 +1097,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
 
   async function updateAllergyReview(
     allergy: AllergyIntolerance,
-    status: 'confirmed' | 'refuted' | 'inactive' | 'resolved',
+    status: 'confirmed' | 'refuted' | 'inactive' | 'resolved' | 'entered-in-error',
     reason: string
   ): Promise<AllergyIntolerance | undefined> {
     if (!allergy.id) return undefined;
@@ -1182,24 +1207,50 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMessage(`Đã xuất FHIR document preliminary với ${uniqueResources.length} tài nguyên đang có trong hồ sơ tải.`);
   }
   const inProgressEncounterCount = encounters.filter((encounter) => encounter.status === 'in-progress').length;
-  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active').length;
+  const activeConditionCount = conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).length;
   const ehrConsistencyFindings: string[] = [];
   const encounterIds = new Set(encounters.map((item) => item.id).filter(Boolean));
+  const encounterById = new Map(encounters.filter((item) => item.id).map((item) => [item.id as string, item]));
   const appointmentById = new Map(appointments.filter((item) => item.id).map((item) => [item.id as string, item]));
   const medicationRequestIds = new Set(medicationRequests.map((item) => item.id).filter(Boolean));
+  const medicationRequestById = new Map(medicationRequests.filter((item) => item.id).map((item) => [item.id as string, item]));
+  const expectedPatientReference = `Patient/${patientId}`;
+  const checkPatientReference = (resourceType: string, resourceId: string | undefined, reference: string | undefined): void => {
+    if (reference && reference !== expectedPatientReference) {
+      ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Patient ${reference} không khớp hồ sơ đang xem.`);
+    }
+  };
+  for (const encounter of encounters) checkPatientReference('Encounter', encounter.id, encounter.subject?.reference);
+  for (const condition of conditions) checkPatientReference('Condition', condition.id, condition.subject?.reference);
+  for (const observation of observations) checkPatientReference('Observation', observation.id, observation.subject?.reference);
+  for (const request of medicationRequests) checkPatientReference('MedicationRequest', request.id, request.subject?.reference);
+  for (const statement of medicationStatements) checkPatientReference('MedicationStatement', statement.id, statement.subject?.reference);
+  for (const administration of medicationAdministrations) checkPatientReference('MedicationAdministration', administration.id, administration.subject?.reference);
+  for (const allergy of allergies) checkPatientReference('AllergyIntolerance', allergy.id, allergy.patient?.reference);
   for (const encounter of encounters) {
     for (const reference of encounter.appointment ?? []) {
       const match = /^Appointment\/([^/]+)$/.exec(reference.reference ?? '');
       if (!match) continue;
       const appointment = appointmentById.get(match[1]);
       if (!appointment) ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} chưa có trong hồ sơ được tải.`);
-      else if (appointment.status !== 'fulfilled') ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} đang ở trạng thái ${appointment.status}, không phải fulfilled.`);
+      else {
+        if (appointment.status !== 'fulfilled') ehrConsistencyFindings.push(`Encounter ${encounter.id}: Appointment ${match[1]} đang ở trạng thái ${appointment.status}, không phải fulfilled.`);
+        if (!appointment.participant?.some((participant) => participant.actor?.reference === expectedPatientReference)) {
+          ehrConsistencyFindings.push(`Encounter ${encounter.id}: Patient của Appointment ${match[1]} không khớp hồ sơ đang xem.`);
+        }
+        if (encounter.subject?.reference !== appointment.participant?.find((participant) => participant.actor?.reference?.startsWith('Patient/'))?.actor?.reference) {
+          ehrConsistencyFindings.push(`Encounter ${encounter.id}: Patient không khớp Patient của Appointment ${match[1]}.`);
+        }
+      }
     }
   }
   const checkEncounterReference = (resourceType: string, resourceId: string | undefined, reference: string | undefined): void => {
     if (!reference) return;
     const match = /^Encounter\/([^/]+)$/.exec(reference);
-    if (match && !encounterIds.has(match[1])) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} chưa có trong hồ sơ được tải.`);
+    if (!match) return;
+    const encounter = encounterById.get(match[1]);
+    if (!encounterIds.has(match[1])) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} chưa có trong hồ sơ được tải.`);
+    else if (encounter?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`${resourceType} ${resourceId ?? '(chưa có id)'}: Encounter ${match[1]} thuộc Patient khác.`);
   };
   for (const condition of conditions) checkEncounterReference('Condition', condition.id, condition.encounter?.reference);
   for (const observation of observations) checkEncounterReference('Observation', observation.id, observation.encounter?.reference);
@@ -1209,13 +1260,26 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     for (const reference of statement.basedOn ?? []) {
       const match = /^MedicationRequest\/([^/]+)$/.exec(reference.reference ?? '');
       if (match && !medicationRequestIds.has(match[1])) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+      else if (match) {
+        const request = medicationRequestById.get(match[1]);
+        if (request?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: MedicationRequest ${match[1]} thuộc Patient khác.`);
+        if (request?.status === 'entered-in-error') ehrConsistencyFindings.push(`MedicationStatement ${statement.id}: liên kết tới MedicationRequest ${match[1]} đã được đánh dấu nhập nhầm.`);
+      }
     }
   }
   for (const administration of medicationAdministrations) {
+    const statusReasonText = administration.statusReason?.text?.trim();
+    if (administration.status === 'not-done' && (!statusReasonText || statusReasonText.length > 500 || administration.dosage || administration.performer?.length)) {
+      ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: bản ghi not-done phải có lý do tối đa 500 ký tự và không được chứa liều hoặc người thực hiện.`);
+    }
     checkEncounterReference('MedicationAdministration', administration.id, administration.context?.reference);
     const match = /^MedicationRequest\/([^/]+)$/.exec(administration.request?.reference ?? '');
     if (match && !medicationRequestIds.has(match[1])) {
       ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: MedicationRequest ${match[1]} chưa có trong hồ sơ được tải.`);
+    } else if (match) {
+      const request = medicationRequestById.get(match[1]);
+      if (request?.subject?.reference !== expectedPatientReference) ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: MedicationRequest ${match[1]} thuộc Patient khác.`);
+      if (request?.status === 'entered-in-error') ehrConsistencyFindings.push(`MedicationAdministration ${administration.id}: liên kết tới MedicationRequest ${match[1]} đã được đánh dấu nhập nhầm.`);
     }
   }
   const activeAllergies = allergies.filter((allergy) =>
@@ -1223,7 +1287,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     !['refuted', 'entered-in-error'].includes(allergy.verificationStatus?.coding?.[0]?.code ?? '')
   );
   const activeMedicationAllergies = activeAllergies.filter((allergy) => allergy.category?.includes('medication'));
-  const latestObservation = observations
+  const validObservations = observations.filter((observation) => observation.status !== 'entered-in-error');
+  const activeMedicationRequests = medicationRequests.filter((request) => request.status === 'active');
+  const latestObservation = validObservations
     .slice()
     .sort((a, b) => (b.effectiveDateTime ?? '').localeCompare(a.effectiveDateTime ?? ''))[0];
   const query = encounterSearch.trim().toLocaleLowerCase();
@@ -1252,6 +1318,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     const effectiveDate = observation.effectiveDateTime?.slice(0, 10) ?? '';
     return (!observationQuery || code.toLocaleLowerCase().includes(observationQuery))
       && (!observationCategory || observation.category?.some((category) => category.coding?.some((coding) => coding.code === observationCategory)))
+      && (!observationStatus || observation.status === observationStatus)
       && (!observationFrom || (effectiveDate && effectiveDate >= observationFrom))
       && (!observationTo || (effectiveDate && effectiveDate <= observationTo));
   });
@@ -1269,6 +1336,33 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       && (!medicationStatusFilter || request.status === medicationStatusFilter)
       && (!medicationFrom || (authoredDate && authoredDate >= medicationFrom))
       && (!medicationTo || (authoredDate && authoredDate <= medicationTo));
+  });
+  const statementQuery = statementSearch.trim().toLocaleLowerCase();
+  const filteredMedicationStatements = medicationStatements.filter((statement) => {
+    const medicationName = statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '';
+    const effectiveDate = statement.effectiveDateTime?.slice(0, 10) ?? statement.effectivePeriod?.start?.slice(0, 10) ?? statement.dateAsserted?.slice(0, 10) ?? '';
+    const searchableText = [medicationName, statement.dosage?.map((dose) => dose.text).join(' '), statement.statusReason?.map((reason) => reason.text).join(' '), statement.note?.map((note) => note.text).join(' ')].join(' ').toLocaleLowerCase();
+    return (!statementQuery || searchableText.includes(statementQuery))
+      && (!statementStatusFilter || statement.status === statementStatusFilter)
+      && (!statementFrom || (effectiveDate && effectiveDate >= statementFrom))
+      && (!statementTo || (effectiveDate && effectiveDate <= statementTo));
+  });
+  const administrationQuery = administrationSearch.trim().toLocaleLowerCase();
+  const filteredMedicationAdministrations = medicationAdministrations.filter((administration) => {
+    const requestId = /^MedicationRequest\/([^/]+)$/.exec(administration.request?.reference ?? '')?.[1];
+    const request = requestId ? medicationRequestById.get(requestId) : undefined;
+    const medicationName = administration.medicationCodeableConcept?.text
+      ?? administration.medicationCodeableConcept?.coding?.[0]?.display
+      ?? administration.medicationReference?.display
+      ?? request?.medicationCodeableConcept?.text
+      ?? request?.medicationCodeableConcept?.coding?.[0]?.display
+      ?? '';
+    const effectiveDate = administration.effectiveDateTime?.slice(0, 10) ?? administration.effectivePeriod?.start?.slice(0, 10) ?? '';
+    const searchableText = [medicationName, administration.statusReason?.text, administration.note?.map((note) => note.text).join(' ')].join(' ').toLocaleLowerCase();
+    return (!administrationQuery || searchableText.includes(administrationQuery))
+      && (!administrationStatusFilter || administration.status === administrationStatusFilter)
+      && (!administrationFrom || (effectiveDate && effectiveDate >= administrationFrom))
+      && (!administrationTo || (effectiveDate && effectiveDate <= administrationTo));
   });
   function selectPatient(nextPatientId: string) {
     setPatientId(nextPatientId);
@@ -1296,6 +1390,10 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
     setMedicationStatusFilter('');
     setMedicationFrom('');
     setMedicationTo('');
+    setStatementSearch('');
+    setStatementStatusFilter('');
+    setStatementFrom('');
+    setStatementTo('');
     setError(undefined);
     setMessage('');
     setLoading(Boolean(nextPatientId));
@@ -1320,17 +1418,17 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
         <h2>Dị ứng đang hoạt động</h2>
         {activeAllergies.length ? <ul>{activeAllergies.map((allergy) => <li key={allergy.id}>{allergy.code?.text ?? allergy.code?.coding?.[0]?.display ?? 'Chưa rõ tác nhân'} · {allergy.verificationStatus?.coding?.[0]?.code ?? 'unknown'}{allergy.criticality ? ` · nguy cơ ${allergy.criticality}` : ''}{allergy.reaction?.map((reaction) => reaction.manifestation?.map((item) => item.text ?? item.coding?.[0]?.display).filter(Boolean).join(', ')).filter(Boolean).map((text) => ` · phản ứng ${text}`)}</li>)}</ul> : <p>Chưa ghi nhận.</p>}
         <h2>Chẩn đoán đang hoạt động</h2>
-        {conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').length
-          ? <ul>{conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && condition.verificationStatus?.coding?.[0]?.code !== 'refuted').map((condition) => <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.verificationStatus?.coding?.[0]?.code ?? 'unknown'}</li>)}</ul>
+        {conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).length
+          ? <ul>{conditions.filter((condition) => condition.clinicalStatus?.coding?.[0]?.code === 'active' && !['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '')).map((condition) => <li key={condition.id}>{condition.code?.text ?? condition.code?.coding?.[0]?.display ?? 'Chưa có tên'} · {condition.verificationStatus?.coding?.[0]?.code ?? 'unknown'}</li>)}</ul>
           : <p>Chưa ghi nhận.</p>}
         <h2>Thuốc đang dùng</h2>
         {medicationStatements.filter((statement) => statement.status === 'active').length
           ? <ul>{medicationStatements.filter((statement) => statement.status === 'active').map((statement) => <li key={statement.id}>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul>
           : <p>Chưa có đối soát thuốc đang dùng.</p>}
-        {medicationRequests.some((request) => request.status === 'active') && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{medicationRequests.filter((request) => request.status === 'active').map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
+        {activeMedicationRequests.length > 0 && <><h3>Đơn thuốc đang hiệu lực</h3><ul>{activeMedicationRequests.map((request) => <li key={request.id}>{request.medicationCodeableConcept?.text ?? request.medicationCodeableConcept?.coding?.[0]?.display ?? 'Chưa có tên'} · {request.dosageInstruction?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ')}</li>)}</ul></>}
         <h2>Kết quả gần đây</h2>
-        {observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).length
-          ? <ul>{observations.filter((observation) => observation.status !== 'entered-in-error').slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {formatObservationValue(observation)} · {observation.status}</li>)}</ul>
+        {validObservations.slice(0, 10).length
+          ? <ul>{validObservations.slice(0, 10).map((observation) => <li key={observation.id}>{observation.effectiveDateTime ? new Date(observation.effectiveDateTime).toLocaleDateString('vi-VN') : 'Không có ngày'} · {observation.code.text ?? observation.code.coding?.[0]?.display ?? 'Chỉ số'}: {formatObservationValue(observation)} · {observation.status}</li>)}</ul>
           : <p>Chưa ghi nhận.</p>}
         <h2>Lần khám gần đây</h2>
         {encounters.slice(0, 10).length
@@ -1379,14 +1477,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {patientId && <div className="stat-grid">
         <section className="stat-card"><span>Lần khám</span><strong>{encounters.length}</strong><small>{inProgressEncounterCount} đang diễn ra</small></section>
         <section className="stat-card"><span>Chẩn đoán đang hoạt động</span><strong>{activeConditionCount}</strong><small>{conditions.length} chẩn đoán được tải</small></section>
-        <section className="stat-card"><span>Kết quả</span><strong>{observations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
+        <section className="stat-card"><span>Kết quả hợp lệ</span><strong>{validObservations.length}</strong><small>{latestObservation?.effectiveDateTime ? `Gần nhất ${new Date(latestObservation.effectiveDateTime).toLocaleDateString('vi-VN')}` : 'Chưa có kết quả'}</small></section>
       </div>}
       {patientId && !loading && <section className={`notice ${ehrConsistencyFindings.length ? 'error' : ''}`} aria-live="polite">
         <strong>Rà soát liên kết hồ sơ:</strong>{' '}
         {ehrConsistencyFindings.length
-          ? <><span>{ehrConsistencyFindings.length} điểm cần kiểm tra. Tham chiếu chưa tải có thể nằm ngoài quyền truy cập hiện tại.</span><ul>{ehrConsistencyFindings.map((finding, index) => <li key={`${finding}-${index}`}>{finding}</li>)}</ul></>
-          : <span>Không phát hiện tham chiếu Encounter/Appointment/MedicationRequest chưa khớp trong dữ liệu đã tải.</span>}
-        <small>Đây là rà soát liên kết dữ liệu, không xác nhận tính đúng đắn lâm sàng.</small>
+          ? <><span>{ehrConsistencyFindings.length} liên kết hoặc trạng thái cần kiểm tra. Tham chiếu chưa tải có thể nằm ngoài quyền truy cập hiện tại.</span><ul>{ehrConsistencyFindings.map((finding, index) => <li key={`${finding}-${index}`}>{finding}</li>)}</ul></>
+          : <span>Không phát hiện Patient hoặc liên kết Encounter/Appointment/MedicationRequest không khớp trong dữ liệu đã tải.</span>}
+        <small>Đây là rà soát tính nhất quán dữ liệu và trạng thái, không xác nhận tính đúng đắn lâm sàng.</small>
       </section>}
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createEncounter}>
@@ -1557,7 +1655,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       {role !== 'Patient' && (
         <form className="panel editor" onSubmit={createMedicationAdministration}>
           <h2>Ghi nhận dùng thuốc</h2>
-          <p className="muted">Lưu lần dùng thuốc đã thực hiện, có thể liên kết đơn kê và lần khám.</p>
+          <p className="muted">Ghi lần dùng thuốc đã thực hiện hoặc liều không được thực hiện kèm lý do; có thể liên kết đơn kê và lần khám.</p>
           <div className="form-grid">
             <label>Liên kết đơn kê
               <select name="administrationRequest" defaultValue="">
@@ -1568,6 +1666,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               </select>
             </label>
             <label>Tên thuốc<input name="administrationMedication" maxLength={200} placeholder="Bắt buộc nếu không chọn đơn kê" /></label>
+            <label>Kết quả
+              <select name="administrationOutcome" defaultValue="completed">
+                <option value="completed">Đã dùng</option>
+                <option value="not-done">Không thực hiện</option>
+              </select>
+            </label>
             <label>Thời điểm dùng<input name="administrationTime" type="datetime-local" defaultValue={localDateTimeInput(new Date().toISOString())} required /></label>
             <label>Liều đã dùng<input name="administrationDoseValue" type="number" min="0.001" step="any" /></label>
             <label>Đơn vị liều<input name="administrationDoseUnit" maxLength={40} placeholder="mg, viên, ml…" /></label>
@@ -1580,10 +1684,11 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 ))}
               </select>
             </label>
+            <label className="full-width">Lý do không thực hiện<textarea name="administrationNotDoneReason" maxLength={500} rows={2} /></label>
             <label className="full-width">Ghi chú<textarea name="administrationNote" maxLength={500} rows={2} /></label>
           </div>
           <div className="form-actions">
-            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Ghi nhận đã dùng'}</button>
+            <button className="button primary" disabled={saving || !patientId}>{saving ? 'Đang lưu…' : 'Ghi nhận kết quả'}</button>
           </div>
         </form>
       )}
@@ -1722,6 +1827,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <label>Ngày bắt đầu<input name="encounterStartDate" type="date" defaultValue={encounter.period?.start?.slice(0, 10) ?? ''} required /></label>
                       <label>Giờ bắt đầu<input name="encounterStartTime" type="time" defaultValue={encounter.period?.start ? new Date(encounter.period.start).toTimeString().slice(0, 5) : ''} required /></label>
                       <label>Lý do khám<textarea name="encounterUpdatedReason" maxLength={200} defaultValue={encounter.reasonCode?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join(', ')} required /></label>
+                      <label>Lý do chỉnh sửa (bắt buộc)<textarea name="encounterChangeReason" maxLength={500} required /></label>
                       <button className="button" disabled={saving}>Lưu chỉnh sửa</button>
                     </form>
                   </details>
@@ -1749,7 +1855,13 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <button className="button primary" disabled={saving}>{saving ? 'Đang lưu…' : 'Lưu tổng kết và kết thúc'}</button>
                     </form>
                   </details>{' '}
-                  <button className="button" disabled={saving} onClick={() => void cancelEncounter(encounter)}>Hủy</button>
+                  <details>
+                    <summary>Hủy lần khám</summary>
+                    <form className="editor" onSubmit={(event) => void cancelEncounter(encounter, event)}>
+                      <label>Lý do hủy (bắt buộc)<textarea name="encounterCancellationReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>{saving ? 'Đang hủy…' : 'Xác nhận hủy'}</button>
+                    </form>
+                  </details>
                 </>}</td>}
               </tr>
             ))}</tbody>
@@ -1780,6 +1892,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <option value="unconfirmed">Chưa xác minh</option>
               <option value="differential">Chẩn đoán phân biệt</option>
               <option value="refuted">Bác bỏ</option>
+              <option value="entered-in-error">Nhập nhầm</option>
             </select>
           </label>
         </div>
@@ -1796,29 +1909,25 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : condition.encounter?.display ?? condition.encounter?.reference ?? '—'}</td>
                 <td>{condition.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 {role !== 'Patient' && <td>
-                  {['provisional', 'unconfirmed', 'differential'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '') && <button className="button" disabled={saving} onClick={() => void confirmCondition(condition)}>Xác nhận</button>}{' '}
-                  {condition.clinicalStatus?.coding?.[0]?.code === 'active' && <details>
-                    <summary>Cập nhật trạng thái</summary>
-                    <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'resolved', event)}>
-                      <label>Lý do giải quyết<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
-                      <button className="button" disabled={saving}>Đánh dấu đã giải quyết</button>
-                    </form>
-                    <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'inactive', event)}>
-                      <label>Lý do tạm ngưng<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
-                      <button className="button" disabled={saving}>Tạm ngưng</button>
-                    </form>
-                  </details>}
-                  {condition.clinicalStatus?.coding?.[0]?.code === 'inactive' && <form className="editor" onSubmit={(event) => void updateConditionClinicalStatus(condition, 'active', event)}>
-                    <label>Lý do tái hoạt<textarea name="conditionStatusReason" maxLength={500} rows={2} required /></label>
-                    <button className="button" disabled={saving}>Tái hoạt</button>
-                  </form>}
-                  {!['refuted', 'entered-in-error'].includes(condition.verificationStatus?.coding?.[0]?.code ?? '') && <details>
-                    <summary>Bác bỏ chẩn đoán</summary>
-                    <form className="editor" onSubmit={(event) => void refuteCondition(condition, event)}>
-                      <label>Lý do bác bỏ<textarea name="conditionRefutationReason" maxLength={500} rows={2} required /></label>
-                      <button className="button" disabled={saving}>Xác nhận bác bỏ</button>
-                    </form>
-                  </details>}
+                  {(() => {
+                    const verification = condition.verificationStatus?.coding?.[0]?.code ?? '';
+                    const clinical = condition.clinicalStatus?.coding?.[0]?.code ?? '';
+                    const actions: { change: 'confirm' | 'refute' | 'active' | 'inactive' | 'resolved' | 'entered-in-error'; label: string }[] = [];
+                    if (verification !== 'entered-in-error') {
+                      if (['provisional', 'unconfirmed', 'differential'].includes(verification)) actions.push({ change: 'confirm', label: 'Xác nhận' });
+                      if (verification !== 'refuted') actions.push({ change: 'refute', label: 'Bác bỏ chẩn đoán' });
+                      if (clinical === 'active' && verification !== 'refuted') actions.push({ change: 'resolved', label: 'Đánh dấu đã giải quyết' }, { change: 'inactive', label: 'Tạm ngưng' });
+                      if (clinical === 'inactive' && verification !== 'refuted') actions.push({ change: 'active', label: 'Tái hoạt' });
+                      actions.push({ change: 'entered-in-error', label: 'Đánh dấu nhập nhầm' });
+                    }
+                    return actions.length ? <details>
+                      <summary>Cập nhật vòng đời</summary>
+                      {actions.map(({ change, label }) => <form className="editor" key={change} onSubmit={(event) => void reviewCondition(condition, change, event)}>
+                        <label>{label} · lý do<textarea name="conditionReviewReason" maxLength={500} rows={2} required /></label>
+                        <button className="button" disabled={saving}>{label}</button>
+                      </form>)}
+                    </details> : '—';
+                  })()}
                 </td>}
               </tr>
             );
@@ -1839,6 +1948,15 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
               <option value="other">Khác</option>
             </select>
           </label>
+          <label>Trạng thái
+            <select value={observationStatus} onChange={(event) => setObservationStatus(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="preliminary">Sơ bộ</option>
+              <option value="final">Cuối cùng</option>
+              <option value="amended">Đã chỉnh sửa</option>
+              <option value="entered-in-error">Nhập nhầm</option>
+            </select>
+          </label>
           <label>Từ ngày<input type="date" value={observationFrom} onChange={(event) => setObservationFrom(event.currentTarget.value)} /></label>
           <label>Đến ngày<input type="date" value={observationTo} onChange={(event) => setObservationTo(event.currentTarget.value)} /></label>
         </div>
@@ -1852,7 +1970,7 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{observation.category?.[0]?.coding?.[0]?.display ?? observationCategoryLabels[observation.category?.[0]?.coding?.[0]?.code ?? ''] ?? '—'}</td>
                 <td>{observation.code.text ?? observation.code.coding?.[0]?.display ?? '—'}</td>
                 <td>{formatObservationValue(observation)}</td>
-                <td>{observation.status}</td>
+              <td>{({ preliminary: 'Sơ bộ', final: 'Cuối cùng', amended: 'Đã chỉnh sửa', 'entered-in-error': 'Nhập nhầm' } as Record<string, string>)[observation.status] ?? observation.status}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : observation.encounter?.display ?? observation.encounter?.reference ?? '—'}</td>
                 <td>{observation.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
                 {role !== 'Patient' && <td>{observation.status !== 'entered-in-error' ? <>
@@ -1890,9 +2008,27 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Thuốc đang dùng và tiền sử dùng</h2>
-        {medicationStatements.length ? <div className="table-wrap"><table>
+        <div className="form-grid">
+          <label className="full-width">Tìm thuốc, cách dùng hoặc ghi chú
+            <input value={statementSearch} onChange={(event) => setStatementSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái
+            <select value={statementStatusFilter} onChange={(event) => setStatementStatusFilter(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="active">Đang dùng</option>
+              <option value="on-hold">Tạm ngưng</option>
+              <option value="not-taken">Không dùng</option>
+              <option value="stopped">Đã ngừng</option>
+              <option value="completed">Đã hoàn tất</option>
+              <option value="entered-in-error">Nhập nhầm</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={statementFrom} onChange={(event) => setStatementFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={statementTo} onChange={(event) => setStatementTo(event.currentTarget.value)} /></label>
+        </div>
+        {filteredMedicationStatements.length ? <div className="table-wrap"><table>
           <thead><tr><th>Ngày xác nhận</th><th>Nguồn</th><th>Thuốc</th><th>Cách dùng</th><th>Trạng thái</th><th>Lý do</th><th>Đơn kê</th><th>Lần khám</th><th>Ghi chú audit</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
-          <tbody>{medicationStatements.map((statement) => {
+          <tbody>{filteredMedicationStatements.map((statement) => {
             const encounter = encounters.find((item) => statement.context?.reference === `Encounter/${item.id}`);
             const basedOnRequest = medicationRequests.find((request) => statement.basedOn?.some((reference) => reference.reference === `MedicationRequest/${request.id}`));
             const sourceLabel = statement.informationSource?.reference === `Patient/${patientId}` ? 'Bệnh nhân báo' : statement.informationSource?.display ?? statement.informationSource?.reference ?? '—';
@@ -1902,12 +2038,12 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{sourceLabel}</td>
                 <td>{statement.medicationCodeableConcept?.text ?? statement.medicationCodeableConcept?.coding?.[0]?.display ?? '—'}</td>
                 <td>{statement.dosage?.map((dose) => [dose.doseAndRate?.map((item) => item.doseQuantity ? `${item.doseQuantity.value ?? ''} ${item.doseQuantity.unit ?? ''}`.trim() : '').filter(Boolean).join(', '), dose.route?.text, dose.timing?.code?.text, dose.text].filter(Boolean).join(' · ')).filter(Boolean).join('; ') || '—'}</td>
-                <td>{statement.status}</td>
+                <td>{statement.status === 'entered-in-error' ? 'Nhập nhầm' : statement.status}</td>
                 <td>{statement.statusReason?.map((reason) => reason.text ?? reason.coding?.[0]?.display).filter(Boolean).join('; ') || '—'}</td>
                 <td>{basedOnRequest?.medicationCodeableConcept?.text ?? basedOnRequest?.medicationCodeableConcept?.coding?.[0]?.display ?? statement.basedOn?.map((reference) => reference.display ?? reference.reference).join(', ') ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : statement.context?.display ?? statement.context?.reference ?? '—'}</td>
                 <td>{statement.note?.map((note) => `${note.time ? new Date(note.time).toLocaleString('vi-VN') : ''}${note.authorReference?.reference ? ` · ${note.authorReference.reference}` : ''}: ${note.text ?? ''}`).join('\n') || '—'}</td>
-                {role !== 'Patient' && <td><details>
+                {role !== 'Patient' && <td>{['active', 'on-hold'].includes(statement.status) ? <details>
                   <summary>Cập nhật</summary>
                   <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
                     <label>Trạng thái
@@ -1922,11 +2058,20 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                     <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
                     <button className="button" disabled={saving}>Lưu thay đổi</button>
                   </form>
-                </details></td>}
+                </details> : statement.status === 'entered-in-error' ? 'Bản ghi nhập nhầm · chỉ xem' : 'Trạng thái kết thúc · chỉ xem'}
+                  {statement.status !== 'entered-in-error' && <details>
+                    <summary>Đánh dấu nhập nhầm</summary>
+                    <form className="editor" onSubmit={(event) => void updateMedicationStatement(statement, event)}>
+                      <input type="hidden" name="statementNextStatus" value="entered-in-error" />
+                      <label>Lý do<textarea name="statementUpdateReason" maxLength={500} rows={2} required /></label>
+                      <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                    </form>
+                  </details>}
+                </td>}
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có bản ghi đối soát thuốc trong phạm vi truy cập.</p>}
+        </table></div> : <p className="empty">{medicationStatements.length ? 'Không có bản ghi đối soát thuốc phù hợp với bộ lọc.' : 'Chưa có bản ghi đối soát thuốc trong phạm vi truy cập.'}</p>}
       </section>
       <section className="panel">
         <h2>Đơn thuốc</h2>
@@ -1955,6 +2100,9 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
           <tbody>{filteredMedicationRequests.map((request) => {
             const encounter = encounters.find((item) => request.encounter?.reference === `Encounter/${item.id}`);
             const quantity = request.dispenseRequest?.quantity;
+            const hasRecordedAdministration = medicationAdministrations.some((administration) =>
+              administration.request?.reference === `MedicationRequest/${request.id}` && administration.status !== 'entered-in-error'
+            );
             return (
               <tr key={request.id}>
                 <td>{request.authoredOn ? new Date(request.authoredOn).toLocaleDateString('vi-VN') : '—'}</td>
@@ -1980,13 +2128,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                       <button className="button" disabled={saving}>Lưu trạng thái</button>
                     </form>
                   </details>}
-                  {request.status !== 'entered-in-error' && <details>
+                  {request.status !== 'entered-in-error' && !hasRecordedAdministration && <details>
                     <summary>Đánh dấu nhập nhầm</summary>
                     <form className="editor" onSubmit={(event) => void markMedicationRequestEnteredInError(request, event)}>
                       <label>Lý do<textarea name="medicationEntryErrorReason" maxLength={500} rows={2} required /></label>
                       <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
                     </form>
                   </details>}
+                  {request.status !== 'entered-in-error' && hasRecordedAdministration && <small>Đã có lần dùng thuốc liên kết; hãy sửa bản ghi dùng thuốc trước nếu cũng được nhập nhầm.</small>}
                 </td>}
               </tr>
             );
@@ -1995,9 +2144,24 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
       </section>
       <section className="panel">
         <h2>Lịch sử dùng thuốc đã ghi nhận</h2>
-        {medicationAdministrations.length ? <div className="table-wrap"><table>
-          <thead><tr><th>Thời điểm</th><th>Thuốc</th><th>Liều</th><th>Đường dùng</th><th>Trạng thái</th><th>Đơn kê</th><th>Lần khám</th><th>Người ghi nhận</th><th>Ghi chú</th></tr></thead>
-          <tbody>{medicationAdministrations.map((administration) => {
+        <div className="form-grid">
+          <label className="full-width">Tìm thuốc hoặc lý do
+            <input value={administrationSearch} onChange={(event) => setAdministrationSearch(event.currentTarget.value)} />
+          </label>
+          <label>Trạng thái
+            <select value={administrationStatusFilter} onChange={(event) => setAdministrationStatusFilter(event.currentTarget.value)}>
+              <option value="">Tất cả</option>
+              <option value="completed">Đã dùng</option>
+              <option value="not-done">Không thực hiện</option>
+              <option value="entered-in-error">Nhập nhầm</option>
+            </select>
+          </label>
+          <label>Từ ngày<input type="date" value={administrationFrom} onChange={(event) => setAdministrationFrom(event.currentTarget.value)} /></label>
+          <label>Đến ngày<input type="date" value={administrationTo} onChange={(event) => setAdministrationTo(event.currentTarget.value)} /></label>
+        </div>
+        {filteredMedicationAdministrations.length ? <div className="table-wrap"><table>
+          <thead><tr><th>Thời điểm</th><th>Thuốc</th><th>Liều</th><th>Đường dùng</th><th>Trạng thái</th><th>Đơn kê</th><th>Lần khám</th><th>Người ghi nhận</th><th>Ghi chú</th>{role !== 'Patient' && <th>Thao tác</th>}</tr></thead>
+          <tbody>{filteredMedicationAdministrations.map((administration) => {
             const request = medicationRequests.find((item) => administration.request?.reference === `MedicationRequest/${item.id}`);
             const encounter = encounters.find((item) => administration.context?.reference === `Encounter/${item.id}`);
             const dose = administration.dosage?.dose;
@@ -2007,15 +2171,22 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                 <td>{administration.medicationCodeableConcept?.text ?? administration.medicationCodeableConcept?.coding?.[0]?.display ?? administration.medicationReference?.display ?? '—'}</td>
                 <td>{dose ? `${dose.value ?? ''} ${dose.unit ?? ''}`.trim() : '—'}</td>
                 <td>{administration.dosage?.route?.text ?? administration.dosage?.route?.coding?.[0]?.display ?? '—'}</td>
-                <td>{administration.status}</td>
+                <td>{medicationAdministrationStatusLabels[administration.status ?? ''] ?? administration.status ?? '—'}{administration.statusReason?.text ? ` · ${administration.statusReason.text}` : ''}</td>
                 <td>{request?.medicationCodeableConcept?.text ?? request?.medicationCodeableConcept?.coding?.[0]?.display ?? administration.request?.display ?? administration.request?.reference ?? '—'}</td>
                 <td>{encounter?.period?.start ? new Date(encounter.period.start).toLocaleString('vi-VN') : administration.context?.display ?? administration.context?.reference ?? '—'}</td>
                 <td>{administration.performer?.map((performer) => performer.actor?.display ?? performer.actor?.reference).filter(Boolean).join(', ') || '—'}</td>
                 <td>{administration.note?.map((note) => note.text).filter(Boolean).join('; ') || '—'}</td>
+                {role !== 'Patient' && <td>{['completed', 'not-done'].includes(administration.status ?? '') ? <details>
+                  <summary>Đánh dấu nhập nhầm</summary>
+                  <form className="editor" onSubmit={(event) => void markMedicationAdministrationEnteredInError(administration, event)}>
+                    <label>Lý do sửa bản ghi<textarea name="administrationErrorReason" maxLength={500} rows={2} required /></label>
+                    <button className="button" disabled={saving}>Xác nhận nhập nhầm</button>
+                  </form>
+                </details> : '—'}</td>}
               </tr>
             );
           })}</tbody>
-        </table></div> : <p className="empty">Chưa có lần dùng thuốc được ghi nhận.</p>}
+        </table></div> : <p className="empty">{medicationAdministrations.length ? 'Không có lần dùng thuốc phù hợp với bộ lọc.' : 'Chưa có lần dùng thuốc được ghi nhận.'}</p>}
       </section>
       <section className="panel">
         <h2>Lịch sử dị ứng</h2>
@@ -2040,6 +2211,14 @@ export function EhrPage({ role, profile }: { role: HospitalRole; profile: Patien
                   <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'resolved')}>Đã hết</button>{' '}
                   <button className="button" disabled={saving} onClick={() => void updateAllergyStatus(allergy, 'inactive')}>Ngừng theo dõi</button>
                 </>}
+                {allergy.verificationStatus?.coding?.[0]?.code !== 'entered-in-error' && <button className="button" disabled={saving} onClick={async () => {
+                  const reason = window.prompt('Lý do đánh dấu bản ghi dị ứng nhập nhầm?')?.trim();
+                  if (!reason) return;
+                  const updated = await updateAllergyReview(allergy, 'entered-in-error', reason);
+                  if (!updated) return;
+                  setAllergies((current) => current.map((item) => item.id === updated.id ? updated : item));
+                  setMessage('Đã đánh dấu bản ghi dị ứng nhập nhầm và lưu lý do.');
+                }}>Đánh dấu nhập nhầm</button>}
               </td>}
             </tr>
           ))}</tbody>

@@ -54,6 +54,19 @@ const cancelOperation = makeOperationDefinition(
   }
 );
 
+const staffCancelOperation = makeOperationDefinition(
+  { scope: 'type', resource: 'Appointment' },
+  {
+    name: 'appointment-staff-cancel',
+    code: 'staff-cancel',
+    parameter: [
+      param('in', 'appointment', 'Reference', 1, '1'),
+      param('in', 'reason', 'string', 1, '1'),
+      param('out', 'return', 'Appointment', 1, '1'),
+    ],
+  }
+);
+
 const rescheduleOperation = makeOperationDefinition(
   { scope: 'type', resource: 'Appointment' },
   {
@@ -114,6 +127,9 @@ const waitlistOperation = makeOperationDefinition(
     parameter: [
       param('in', 'service', 'Reference', 1, '1'),
       param('in', 'description', 'string', 0, '1'),
+      param('in', 'preferredStartDate', 'date', 0, '1'),
+      param('in', 'preferredEndDate', 'date', 0, '1'),
+      param('in', 'timezone', 'string', 0, '1'),
       param('out', 'return', 'Appointment', 1, '1'),
     ],
   }
@@ -146,6 +162,11 @@ interface CancelParameters {
   appointment: Reference;
 }
 
+interface StaffCancelParameters {
+  appointment: Reference;
+  reason: string;
+}
+
 interface RescheduleParameters {
   appointment: Reference;
   slot: Reference;
@@ -169,6 +190,9 @@ interface StartEncounterParameters {
 interface WaitlistParameters {
   service: Reference;
   description?: string;
+  preferredStartDate?: string;
+  preferredEndDate?: string;
+  timezone?: string;
 }
 
 interface OfferWaitlistParameters {
@@ -176,7 +200,58 @@ interface OfferWaitlistParameters {
   slot: Reference;
 }
 
-/** Creates one Patient waitlist Appointment per active HealthcareService. */
+const WAITLIST_PREFERENCE_URL = 'urn:smart-hospital:waitlist-preference';
+
+function dateInTimeZone(value: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+}
+
+function getWaitlistPreference(startDate?: string, endDate?: string, timezone?: string): NonNullable<Appointment['extension']>[number] | undefined {
+  if (!startDate && !endDate) return undefined;
+  if (!startDate || !endDate || !timezone || timezone.length > 100) throw new OperationOutcomeError(badRequest('Both preferred dates and a valid local timezone are required.'));
+  const startTime = Date.parse(`${startDate}T00:00:00.000Z`);
+  const endTime = Date.parse(`${endDate}T00:00:00.000Z`);
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || new Date(startTime).toISOString().slice(0, 10) !== startDate ||
+      new Date(endTime).toISOString().slice(0, 10) !== endDate || endTime < startTime ||
+      endTime - startTime > 366 * 24 * 60 * 60 * 1000) {
+    throw new OperationOutcomeError(badRequest('Preferred dates must be a valid upcoming range no longer than one year.'));
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+  } catch {
+    throw new OperationOutcomeError(badRequest('A valid IANA timezone is required for preferred dates.'));
+  }
+  if (endDate < dateInTimeZone(new Date(), timezone)) {
+    throw new OperationOutcomeError(badRequest('The preferred date range must include today or a future date in the selected timezone.'));
+  }
+  return {
+    url: WAITLIST_PREFERENCE_URL,
+    extension: [
+      { url: 'start-date', valueDate: startDate },
+      { url: 'end-date', valueDate: endDate },
+      { url: 'timezone', valueString: timezone },
+    ],
+  };
+}
+
+function slotMatchesWaitlistPreference(appointment: Appointment, slot: Slot): boolean {
+  const preference = appointment.extension?.find((extension) => extension.url === WAITLIST_PREFERENCE_URL);
+  if (!preference) return true;
+  const startDate = preference.extension?.find((extension) => extension.url === 'start-date')?.valueDate;
+  const endDate = preference.extension?.find((extension) => extension.url === 'end-date')?.valueDate;
+  const timezone = preference.extension?.find((extension) => extension.url === 'timezone')?.valueString;
+  if (!startDate || !endDate || !timezone || !slot.start) return false;
+  try {
+    const localDate = dateInTimeZone(new Date(slot.start), timezone);
+    return localDate >= startDate && localDate <= endDate;
+  } catch {
+    return false;
+  }
+}
+
+/** Creates or updates one Patient waitlist Appointment per active HealthcareService. */
 export async function appointmentWaitlistHandler(req: FhirRequest): Promise<FhirResponse> {
   const ctx = getAuthenticatedContext();
   const patientId = getPatientId();
@@ -185,6 +260,7 @@ export async function appointmentWaitlistHandler(req: FhirRequest): Promise<Fhir
   if (!serviceId) return [badRequest('A HealthcareService reference is required.')];
   const description = params.description?.trim();
   if (description && description.length > 200) return [badRequest('Description must be 200 characters or fewer.')];
+  const preference = getWaitlistPreference(params.preferredStartDate, params.preferredEndDate, params.timezone);
 
   const appointment = await ctx.systemRepo.ensureInTransaction(
     async (txRepo) => {
@@ -206,13 +282,29 @@ export async function appointmentWaitlistHandler(req: FhirRequest): Promise<Fhir
         resource?.meta?.project === ctx.project.id &&
         resource.participant?.some((participant) => participant.actor?.reference === `HealthcareService/${serviceId}`)
       );
-      if (duplicate) return duplicate as Appointment;
+      if (duplicate) {
+        const updated = {
+          ...duplicate,
+          description: description || undefined,
+          extension: [
+            ...(duplicate.extension ?? []).filter((extension) => extension.url !== WAITLIST_PREFERENCE_URL),
+            ...(preference ? [preference] : []),
+          ],
+          note: [...(duplicate.note ?? []), {
+            time: new Date().toISOString(),
+            authorReference: { reference: `Patient/${patientId}` },
+            text: 'Bệnh nhân đã cập nhật khoảng ngày mong muốn cho danh sách chờ.',
+          }],
+        };
+        return txRepo.updateResource(updated, duplicate.meta?.versionId ? { ifMatch: duplicate.meta.versionId } : undefined);
+      }
       const serviceType = service.type?.length ? service.type : [{ text: service.name }];
       return txRepo.createResource<Appointment>({
         resourceType: 'Appointment',
         meta: { project: ctx.project.id },
         status: 'waitlist',
         description: description || undefined,
+        extension: preference ? [preference] : undefined,
         serviceType,
         participant: [
           { actor: { reference: `Patient/${patientId}` }, status: 'accepted' },
@@ -247,6 +339,7 @@ export async function appointmentOfferWaitlistHandler(req: FhirRequest): Promise
       if (!patientParticipant?.actor || !serviceId) throw new OperationOutcomeError(badRequest('Waitlist Appointment must reference a Patient and HealthcareService.'));
       const slot = await txRepo.readResource<Slot>('Slot', slotId);
       if (slot.meta?.project !== ctx.project.id || slot.status !== 'free' || !isFutureInterval(slot)) throw new OperationOutcomeError(conflict('The selected Slot is no longer available.'));
+      if (!slotMatchesWaitlistPreference(current, slot)) throw new OperationOutcomeError(conflict('The selected Slot is outside the Patient\'s preferred date range.'));
       const scheduleId = /^Schedule\/([^/]+)$/.exec(slot.schedule?.reference ?? '')?.[1];
       if (!scheduleId) throw new OperationOutcomeError(badRequest('The Slot is not attached to a valid Schedule.'));
       const schedule = await txRepo.readResource<Schedule>('Schedule', scheduleId);
@@ -395,7 +488,7 @@ export async function appointmentStartEncounterHandler(req: FhirRequest): Promis
     async (txRepo) => {
       await txRepo.executeRawSql(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`${ctx.project.id}:Encounter:Appointment:${appointmentId}`],
+        [`${ctx.project.id}:Encounter:write:Appointment:${appointmentId}`],
         { resourceTypes: ['Appointment', 'Encounter'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.startEncounterLock' }
       );
       const appointment = await txRepo.readResource<Appointment>('Appointment', appointmentId);
@@ -709,6 +802,62 @@ export async function appointmentCancelHandler(req: FhirRequest): Promise<FhirRe
   );
 
   return [allOk, buildOutputParameters(cancelOperation, { return: appointment })];
+}
+
+/** Cancels a future Appointment for authorized staff and releases its Slot atomically with an audit reason. */
+export async function appointmentStaffCancelHandler(req: FhirRequest): Promise<FhirResponse> {
+  const ctx = getAuthenticatedContext();
+  const practitionerId = /^Practitioner\/([^/]+)$/.exec(ctx.profile.reference ?? '')?.[1];
+  if (!ctx.membership.admin && !practitionerId) throw new OperationOutcomeError(forbidden('Only authenticated staff may cancel an Appointment.'));
+  const params = parseInputParameters<StaffCancelParameters>(staffCancelOperation, req);
+  const appointmentId = /^Appointment\/([^/]+)$/.exec(params.appointment.reference ?? '')?.[1];
+  const reason = params.reason.trim();
+  if (!appointmentId) return [badRequest('An Appointment reference is required.')];
+  if (!reason || reason.length > 500) return [badRequest('Cancellation reason is required and must be 500 characters or fewer.')];
+  if (practitionerId && !ctx.membership.admin) {
+    const practitioner = await ctx.systemRepo.readResource<Practitioner>('Practitioner', practitionerId);
+    if (practitioner.meta?.project !== ctx.project.id || practitioner.active === false) {
+      throw new OperationOutcomeError(forbidden('Inactive or out-of-project Practitioners cannot cancel Appointments.'));
+    }
+  }
+
+  const appointment = await ctx.repo.ensureInTransaction(async (txRepo) => {
+    await txRepo.executeRawSql(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`${ctx.project.id}:Appointment:cancel:${appointmentId}`],
+      { resourceTypes: ['Appointment'], operation: 'write', mode: DatabaseMode.WRITER, source: 'appointment.staffCancelLock' }
+    );
+    const current = await txRepo.readResource<Appointment>('Appointment', appointmentId);
+    if (current.meta?.project !== ctx.project.id) throw new OperationOutcomeError(forbidden('Appointment belongs to another project.'));
+    if (!['proposed', 'pending', 'booked', 'waitlist'].includes(current.status ?? '')) {
+      throw new OperationOutcomeError(conflict('Only an active Appointment can be cancelled.'));
+    }
+    const unscheduledWaitlist = current.status === 'waitlist' && !current.start && !current.slot?.length;
+    const startsAt = current.start ? new Date(current.start).getTime() : Number.NaN;
+    if (!unscheduledWaitlist && (!Number.isFinite(startsAt) || startsAt <= Date.now())) {
+      throw new OperationOutcomeError(conflict('Only future scheduled Appointments can be cancelled.'));
+    }
+    if (practitionerId && !ctx.membership.admin && unscheduledWaitlist) {
+      throw new OperationOutcomeError(forbidden('Only a Project Admin may cancel an unassigned waitlist request.'));
+    }
+    if (practitionerId && !ctx.membership.admin && !(current.participant ?? []).some((participant) =>
+      participant.actor?.reference === `Practitioner/${practitionerId}`
+    )) {
+      throw new OperationOutcomeError(forbidden('Only the Practitioner assigned to this Appointment may cancel it.'));
+    }
+    const at = new Date().toISOString();
+    const actor = practitionerId ? `Practitioner/${practitionerId}` : 'Project Admin';
+    const updated = await txRepo.updateResource<Appointment>({
+      ...current,
+      status: 'cancelled',
+      comment: [current.comment, `[${at} · ${actor}] cancelled: ${reason}`].filter(Boolean).join('\n'),
+    }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);
+    const slotIds = new Set(current.slot?.map((slot) => /^Slot\/([^/]+)$/.exec(slot.reference ?? '')?.[1])
+      .filter((id): id is string => Boolean(id)) ?? []);
+    for (const slotId of slotIds) await releaseSlotIfSchedulable(txRepo, slotId);
+    return updated;
+  }, { resourceTypes: ['Appointment', 'Slot', 'Schedule', 'Practitioner'], source: 'appointment.staffCancel' });
+  return [allOk, buildOutputParameters(staffCancelOperation, { return: appointment })];
 }
 
 /** Moves the Patient's own future Appointment to a free Slot and releases the old Slot atomically. */

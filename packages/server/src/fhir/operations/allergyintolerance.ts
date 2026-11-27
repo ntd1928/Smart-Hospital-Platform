@@ -23,7 +23,7 @@ const reviewOperation = makeOperationDefinition({ scope: 'type', resource: 'Alle
   ],
 });
 
-const reviewStatuses = ['confirmed', 'refuted', 'inactive', 'resolved'] as const;
+const reviewStatuses = ['confirmed', 'refuted', 'inactive', 'resolved', 'entered-in-error'] as const;
 type ReviewStatus = (typeof reviewStatuses)[number];
 
 /** Records an attributed AllergyIntolerance for an assigned Patient. */
@@ -97,7 +97,13 @@ export async function allergyIntoleranceReviewHandler(req: FhirRequest): Promise
 
     let verificationStatus = current.verificationStatus;
     let clinicalStatus = current.clinicalStatus;
-    if (params.status === 'confirmed' || params.status === 'refuted') {
+    if (params.status === 'entered-in-error') {
+      if (verificationStatus?.coding?.[0]?.code === 'entered-in-error') {
+        throw new OperationOutcomeError(conflict('AllergyIntolerance is already marked entered-in-error.'));
+      }
+      verificationStatus = { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: 'entered-in-error' }] };
+      clinicalStatus = undefined;
+    } else if (params.status === 'confirmed' || params.status === 'refuted') {
       if (current.verificationStatus?.coding?.[0]?.code !== 'unconfirmed') {
         throw new OperationOutcomeError(conflict('Only an unconfirmed allergy can be confirmed or refuted.'));
       }
@@ -118,7 +124,9 @@ export async function allergyIntoleranceReviewHandler(req: FhirRequest): Promise
       clinicalStatus,
       note: [...(current.note ?? []), {
         time: at,
-        text: `AllergyIntolerance review ${params.status}: ${reason}`,
+        text: params.status === 'entered-in-error'
+          ? `AllergyIntolerance marked entered-in-error from verification ${current.verificationStatus?.coding?.[0]?.code ?? 'unknown'} and clinical status ${current.clinicalStatus?.coding?.[0]?.code ?? 'none'}: ${reason}`
+          : `AllergyIntolerance review ${params.status}: ${reason}`,
         authorReference: { reference: `Practitioner/${practitionerId}` },
       }],
     }, current.meta?.versionId ? { ifMatch: current.meta.versionId } : undefined);

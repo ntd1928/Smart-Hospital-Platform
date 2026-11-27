@@ -4,6 +4,7 @@ import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
 import { Router } from 'express';
 import { getAuthenticatedContext } from '../context';
 import { authenticateRequest } from '../oauth/middleware';
+import { OPERATION_MANAGED_CLINICAL_RESOURCES } from './clinical-resources';
 import {
   appointmentAvailableHandler,
   appointmentBookHandler,
@@ -12,11 +13,14 @@ import {
   appointmentOfferWaitlistHandler,
   appointmentRecordOutcomeHandler,
   appointmentRescheduleHandler,
+  appointmentStaffCancelHandler,
   appointmentStartEncounterHandler,
   appointmentWaitlistHandler,
 } from './operations/appointments';
-import { medicationAdministrationRecordHandler } from './operations/medicationadministration';
-import { encounterCompleteHandler } from './operations/encounters';
+import { medicationAdministrationRecordHandler, medicationAdministrationUpdateHandler } from './operations/medicationadministration';
+import { conditionRecordHandler, conditionReviewHandler } from './operations/condition';
+import { observationRecordHandler, observationUpdateHandler } from './operations/observation';
+import { encounterAddNoteHandler, encounterCancelHandler, encounterCompleteHandler, encounterRecordHandler, encounterUpdateDetailsHandler } from './operations/encounters';
 import { medicationStatementRecordHandler, medicationStatementUpdateStatusHandler } from './operations/medicationstatement';
 import { medicationRequestRecordHandler, medicationRequestUpdateStatusHandler } from './operations/medicationrequest';
 import { allergyIntoleranceRecordHandler, allergyIntoleranceReviewHandler } from './operations/allergyintolerance';
@@ -56,7 +60,7 @@ fhirRouter.get('/metadata', (_req, res) =>
   res.json({
     resourceType: 'CapabilityStatement',
     status: 'active',
-    date: '2026-10-22',
+    date: new Date().toISOString().slice(0, 10),
     kind: 'instance',
     fhirVersion: '4.0.1',
     format: ['json'],
@@ -64,12 +68,12 @@ fhirRouter.get('/metadata', (_req, res) =>
       {
         mode: 'server',
         interaction: [{ code: 'transaction' }],
-        resource: SUPPORTED_FHIR_RESOURCES.map((type) => ({
-          type,
-          interaction: ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'].map(
-            (code) => ({ code })
-          ),
-        })),
+        resource: SUPPORTED_FHIR_RESOURCES.map((type) => {
+          const interactions = OPERATION_MANAGED_CLINICAL_RESOURCES.has(type)
+            ? ['read', 'search-type', 'history-instance', 'vread']
+            : ['read', 'search-type', 'create', 'update', 'delete', 'history-instance', 'vread'];
+          return { type, interaction: interactions.map((code) => ({ code })) };
+        }),
       },
     ],
   })
@@ -84,6 +88,14 @@ router.add('POST', '/Appointment/$check-in', appointmentCheckInHandler);
 router.add('POST', '/Appointment/$record-outcome', appointmentRecordOutcomeHandler);
 router.add('POST', '/Appointment/$start-encounter', appointmentStartEncounterHandler);
 router.add('POST', '/Encounter/$complete', encounterCompleteHandler);
+router.add('POST', '/Encounter/$record', encounterRecordHandler);
+router.add('POST', '/Encounter/$update-details', encounterUpdateDetailsHandler);
+router.add('POST', '/Encounter/$add-note', encounterAddNoteHandler);
+router.add('POST', '/Encounter/$cancel', encounterCancelHandler);
+router.add('POST', '/Condition/$record', conditionRecordHandler);
+router.add('POST', '/Condition/$review', conditionReviewHandler);
+router.add('POST', '/Observation/$record', observationRecordHandler);
+router.add('POST', '/Observation/$update', observationUpdateHandler);
 router.add('POST', '/MedicationStatement/$record', medicationStatementRecordHandler);
 router.add('POST', '/MedicationStatement/$update-status', medicationStatementUpdateStatusHandler);
 router.add('POST', '/MedicationRequest/$record', medicationRequestRecordHandler);
@@ -91,9 +103,11 @@ router.add('POST', '/MedicationRequest/$update-status', medicationRequestUpdateS
 router.add('POST', '/AllergyIntolerance/$record', allergyIntoleranceRecordHandler);
 router.add('POST', '/AllergyIntolerance/$review', allergyIntoleranceReviewHandler);
 router.add('POST', '/Appointment/$waitlist', appointmentWaitlistHandler);
+router.add('POST', '/Appointment/$staff-cancel', appointmentStaffCancelHandler);
 router.add('POST', '/Appointment/$offer-waitlist', appointmentOfferWaitlistHandler);
 router.add('POST', '/Appointment/$reschedule', appointmentRescheduleHandler);
 router.add('POST', '/MedicationAdministration/$record', medicationAdministrationRecordHandler);
+router.add('POST', '/MedicationAdministration/$update', medicationAdministrationUpdateHandler);
 fhirRouter.use(async (req, res) => {
   const ctx = getAuthenticatedContext();
   const fhirRequest: FhirRequest = {

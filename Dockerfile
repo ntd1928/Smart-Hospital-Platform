@@ -35,6 +35,8 @@ EXPOSE 8103
 CMD ["node", "dist/index.js"]
 
 FROM source AS web-build
+ARG VITE_MEDPLUM_BASE_URL=http://localhost:8103/
+ENV VITE_MEDPLUM_BASE_URL=${VITE_MEDPLUM_BASE_URL}
 RUN npm run build -w @smart-hospital/app
 
 FROM nginx:1.28-alpine AS web

@@ -1,8 +1,8 @@
-# Kiến trúc hệ thống
+# Kiến trúc Smart Hospital Platform
 
-Tài liệu chia hai phần: **kiến trúc hiện tại** là những gì đã có trên `main` và chạy được bằng Docker Compose; **kiến trúc mục tiêu** là thiết kế cho tuần 8–14, chưa triển khai. Lộ trình và trạng thái từng tuần nằm ở [PLAN](../PLAN.md).
+Tài liệu mô tả kiến trúc ứng dụng hiện tại chạy local bằng Docker và phần AWS staging được khai báo bằng CDK nhưng chưa deploy. Lộ trình cùng trạng thái từng tuần nằm ở [PLAN](../PLAN.md).
 
-## Kiến trúc hiện tại (tuần 5–7)
+## Kiến trúc hiện tại
 
 ```mermaid
 flowchart TD
@@ -27,6 +27,8 @@ Backend là bản tách modular monolith Medplum 5.2.7. Chế độ demo chạy 
 | Seed       | `scripts/seed.ts`, image `seed`   | Tạo project, tài khoản demo, Patient, Schedule/Slot, Appointment mẫu         |
 | PostgreSQL | service `postgres`                | Lưu FHIR resource, lịch sử phiên bản, bảng lookup; REPEATABLE READ mặc định  |
 | Redis      | service `redis`                   | Cache, phiên đăng nhập; bật AOF                                              |
+
+AWS staging baseline nằm trong `infra/aws` và được mô tả bởi CDK; chưa có stack hosted. Khi triển khai, Route 53 trỏ hai hostname HTTPS tới cùng ALB. ALB định tuyến hostname ứng dụng và API tới hai ECS/Fargate service chạy trong private subnets. API kết nối PostgreSQL RDS và Redis trong isolated subnets. FHIR Binary payloads đi qua storage routes của API rồi được lưu trong bucket S3 riêng; task role chỉ đọc/ghi/xóa object dưới `binary/*`. Local/Docker vẫn dùng filesystem và app chưa có giao diện tài liệu. Xem [AWS CDK](../../infra/aws/README.md).
 
 ## Dữ liệu
 
@@ -64,7 +66,7 @@ SignInForm lấy project ID công khai, gửi email/password với PKCE, chọn 
 
 Ma trận là phạm vi demo/UI; backend thực thi policy upstream, không có hệ RBAC song song. Practitioner có quyền ghi nhiều resource nghiệp vụ nhưng không phải project-admin. Menu không thay thế backend authorization.
 
-## Kiến trúc mục tiêu (tuần 8–14, chưa triển khai)
+## Kiến trúc cloud mục tiêu và phần chưa triển khai
 
 ```mermaid
 flowchart TD
@@ -87,12 +89,12 @@ flowchart TD
 
 | Tuần | Bổ sung           | Thiết kế dự kiến                                                                                                                                     |
 | ---- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8    | EHR               | Mở Encounter, Condition, Observation qua FHIR router; luật quyền giữ theo AccessPolicy hiện có                                                       |
-| 8    | Tài liệu y tế     | File lưu trên S3, metadata và liên kết hồ sơ lưu bằng FHIR resource; API cấp URL tải lên/tải xuống có thời hạn                                       |
+| 8    | EHR               | Encounter, Condition, Observation đã có API và UI nền tảng; vòng đời lâm sàng đầy đủ còn tiếp tục hoàn thiện                                         |
+| 8    | Tài liệu y tế     | S3 Binary backend đã tích hợp cho AWS; chưa có giao diện tài liệu hoặc stack đã deploy                                                               |
 | 9–10 | Trợ lý AI         | Pipeline parse → chunk → embedding → vector index; truy xuất rồi gọi LLM, trả lời kèm trích dẫn. Chi tiết: [AI research](../research/AI-RESEARCH.md) |
 | 10   | AI theo quyền     | AI đọc hồ sơ qua FHIR API bằng quyền phiên người dùng, không dùng token quản trị, không đưa cả database vào prompt                                   |
-| 11   | AWS               | Container chạy trên ECS hoặc EC2, RDS PostgreSQL, Redis managed, S3; mạng private cho database/cache; secrets trong AWS                              |
-| 11   | Backup            | Snapshot RDS tự động, thử restore trên môi trường riêng                                                                                              |
+| 11   | AWS               | CDK staging baseline đã khai báo ECS/Fargate, RDS, Redis, S3, private subnets, HTTPS, secrets và CloudWatch; chưa deploy                              |
+| 11   | Backup            | RDS automated backup, Redis snapshot và S3 versioning đã cấu hình; restore drill chưa chạy                                                          |
 | 12   | CI/CD và giám sát | CI hiện có + build/push image, deploy tự động; CloudWatch logs, metrics, alarm                                                                       |
 
 Các lựa chọn còn mở: ECS hay EC2, Terraform hay CDK, model LLM/embedding, nơi lưu vector index. Ghi quyết định vào mục dưới khi chốt.
@@ -101,7 +103,7 @@ Các lựa chọn còn mở: ECS hay EC2, Terraform hay CDK, model LLM/embedding
 
 1. Tách backend cần thiết và dùng SDK/component npm để hạn chế phần phải bảo trì.
 2. Giữ FHIR API và auth upstream, không thêm bảng User hoặc CRUD REST song song.
-3. Docker Compose chạy toàn bộ stack demo và build image local; chưa publish registry hoặc triển khai cloud.
+3. Docker Compose chạy toàn bộ stack demo local. AWS CDK mô tả một staging baseline nhưng chưa có deploy hosted hay CI/CD.
 4. Project demo bật validate-terminology để từ chối code FHIR không hợp lệ.
 5. Tất cả dữ liệu demo giả lập, chỉ dùng localhost.
 6. Đặt lịch dựa trên FHIR Schedule/Slot; luật trùng lịch và hủy lịch nằm ở repository để không bị bỏ qua khi gọi API trực tiếp.

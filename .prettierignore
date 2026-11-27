@@ -6,3 +6,4 @@ test-results
 package-lock.json
 docs/architecture/upstream-manifest.json
 .local
+infra/aws/cdk.out
