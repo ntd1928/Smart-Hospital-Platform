@@ -1,46 +1,40 @@
-FROM node:22.22.0-bookworm-slim AS dependencies
-WORKDIR /app
-RUN npm install --global npm@11.21.1
-COPY package.json package-lock.json .npmrc ./
-COPY packages/app/package.json ./packages/app/package.json
-COPY packages/server/package.json ./packages/server/package.json
-RUN npm ci
+# Medplum production Dockerfile
 
-FROM dependencies AS source
-COPY . .
-RUN mkdir -p /app/.runtime /app/packages/server/binary && chown -R node:node /app/.runtime /app/packages/server/binary
+# This Dockerfile depends on files created by scripts/build-docker-server.sh:
+#  1. `medplum-server-metadata.tar.gz` - contains package.json and package-lock.json files
+#  2. `medplum-server-runtime.tar.gz` - contains the compiled JavaScript files and other runtime assets
 
-FROM source AS seed
-USER node
-CMD ["node", "--import", "tsx", "scripts/seed.ts"]
+# The archive files are decompressed and extracted into the specified destinations.
+# We do this to preserve the folder structure in a single layer.
+# See: https://docs.docker.com/reference/dockerfile/#adding-local-tar-archives
 
-FROM source AS server-build
-RUN npm run build -w @smart-hospital/server
+# Uses Docker "Hardened Images":
+# https://hub.docker.com/hardened-images/catalog/dhi/node/guides
+# It does not include any development dependencies.
 
-FROM dependencies AS production-dependencies
-RUN npm prune --omit=dev
+# Builds multiarch docker images
+# https://docs.docker.com/build/building/multi-platform/
+# https://www.docker.com/blog/multi-arch-build-and-images-the-simple-way/
 
-FROM node:22.22.0-bookworm-slim AS server
+# Supported architectures:
+# linux/amd64, linux/arm64
+# https://github.com/docker-library/official-images#architectures-other-than-amd64
+
+# Stage 1: Build the application and install production dependencies
+FROM dhi.io/node:24.18-dev@sha256:fa8a2aa931baf27f4e741301f1febbefa7f17cfc2f724e0a04441bd5a37b9098 AS build-stage
 ENV NODE_ENV=production
-WORKDIR /app
-COPY --from=production-dependencies /app/node_modules ./node_modules
-COPY --from=production-dependencies /app/packages/server ./packages/server
-COPY --from=server-build /app/packages/server/dist ./packages/server/dist
-COPY packages/server/medplum.config.json ./packages/server/medplum.config.json
-COPY LICENSE.txt NOTICE ./
-RUN mkdir -p /app/packages/server/binary && chown node:node /app/packages/server/binary
-WORKDIR /app/packages/server
-USER node
-EXPOSE 8103
-CMD ["node", "dist/index.js"]
+WORKDIR /usr/src/medplum
+ADD ./medplum-server-metadata.tar.gz ./
+RUN npm ci --omit=dev && \
+  rm package-lock.json
 
-FROM source AS web-build
-ARG VITE_MEDPLUM_BASE_URL=http://localhost:8103/
-ENV VITE_MEDPLUM_BASE_URL=${VITE_MEDPLUM_BASE_URL}
-RUN npm run build -w @smart-hospital/app
+# Stage 2: Create the runtime image
+FROM dhi.io/node:24.18@sha256:25d1d34dfc6d58644ca3cfb7d532fb91343177363570a033d5a524055610008c AS runtime-stage
+ENV NODE_ENV=production
+WORKDIR /usr/src/medplum
+COPY --from=build-stage /usr/src/medplum/ ./
+ADD ./medplum-server-runtime.tar.gz ./
 
-FROM nginx:1.28-alpine AS web
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=web-build /app/packages/app/dist /usr/share/nginx/html
-COPY LICENSE.txt NOTICE /usr/share/licenses/smart-hospital/
-EXPOSE 8080
+EXPOSE 5000 8103
+
+ENTRYPOINT [ "node", "--experimental-loader=@opentelemetry/instrumentation/hook.mjs", "--import", "./packages/server/dist/otel/instrumentation.js", "packages/server/dist/index.js" ]

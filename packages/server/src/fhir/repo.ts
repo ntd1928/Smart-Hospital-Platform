@@ -42,18 +42,11 @@ import {
   toTypedValue,
   validateResourceType,
 } from '@medplum/core';
-import type {
-  CreateResourceOptions,
-  DeleteResourceOptions,
-  ReadHistoryOptions,
-  UpdateResourceOptions,
-} from '@medplum/fhir-router';
+import type { CreateResourceOptions, ReadHistoryOptions, UpdateResourceOptions } from '@medplum/fhir-router';
 import { FhirRepository, RepositoryMode } from '@medplum/fhir-router';
 import type {
-  Appointment,
   AccessPolicy,
   AccessPolicyResource,
-  AuditEvent,
   AuditEventEntityDetail,
   Binary,
   Bundle,
@@ -63,14 +56,10 @@ import type {
   OperationDefinitionParameter,
   OperationOutcome,
   Parameters,
-  Practitioner,
   Project,
-  ProjectMembership,
   Reference,
   Resource,
   ResourceType,
-  Schedule,
-  Slot,
 } from '@medplum/fhirtypes';
 import assert from 'node:assert';
 import { randomUUID } from 'node:crypto';
@@ -108,17 +97,13 @@ import {
   VreadInteraction,
 } from '../util/auditevent';
 import { patchObject } from '../util/patch';
+import { addBackgroundJobs } from '../workers';
+import { addSubscriptionJobs } from '../workers/subscription';
+import { checkWebSocketSubscriptionLimit } from '../ws/subscriptions';
 import { FhirQuotaCost } from './fhirquota';
-import {
-  findAppointmentConflict,
-  findAppointmentConflictForSlot,
-  findActiveAppointmentForSlot,
-  findAppointmentForSlot,
-  findSlotConflict,
-  getAppointmentPractitionerReferences,
-} from './appointment-conflicts';
 import { clamp, makeOperationDefinitionParameter, parseParametersFromDefinitions } from './operations/utils/parameters';
 import { getPatients } from './patient';
+import { preCommitValidation } from './precommit';
 import { getResourceTypesFromReferences, replaceConditionalReferences, validateResourceReferences } from './references';
 import type {
   ExecuteSqlOptions,
@@ -145,7 +130,6 @@ import {
   getResourceCacheEntry,
   setResourceCacheEntry,
 } from './repository/resource-cache';
-import type { HistoryRow } from './repository/row-builder';
 import {
   buildDeletedResourceRow,
   buildDeleteHistoryContent,
@@ -161,14 +145,7 @@ import type { SearchOptions } from './search';
 import { buildSearchExpression, searchByReferenceImpl, searchImpl } from './search';
 import { lookupTables } from './searchparameter';
 import type { ShardRouting } from './sharding';
-import {
-  getResourceTypeShardId,
-  GLOBAL_SHARD_ID,
-  normalizeShardId,
-  resolveShardId,
-  shardRoutingError,
-  TODO_SHARD_ID,
-} from './sharding';
+import { GLOBAL_SHARD_ID, normalizeShardId, resolveShardId, shardRoutingError, TODO_SHARD_ID } from './sharding';
 import type { Expression, PgQueryable } from './sql';
 import { Condition, DeleteQuery, Disjunction, InsertQuery, SelectQuery } from './sql';
 
@@ -296,9 +273,8 @@ export class Repository extends FhirRepository implements Disposable {
    * 16. 06/30/26 - Added search param: Provenance-activity (https://github.com/medplum/medplum/pull/9709)
    * 17. 08/27/26 - Added search param: PractitionerRole-davinci-pdex-network
    * 18. 09/23/26 - Added search param: Login-project (https://github.com/medplum/medplum/issues/10634)
-   * 19. 10/06/26 - Added search param: CoverageEligibilityRequest-coverage (https://github.com/medplum/medplum/issues/10814)
    */
-  static readonly VERSION: number = 19;
+  static readonly VERSION: number = 18;
 
   /**
    * Constructs a new Repository instance.
@@ -587,21 +563,7 @@ export class Repository extends FhirRepository implements Disposable {
     };
     const startTime = Date.now();
     try {
-      const authenticatedAppointment =
-        resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      const authenticatedSlot =
-        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      const result = authenticatedAppointment
-        ? await this.withAppointmentWrite(resourceWithId, async (repo) => {
-            await repo.ensureNoAppointmentConflict(resourceWithId);
-            return repo.updateResourceImpl(resourceWithId, true);
-          })
-        : authenticatedSlot
-          ? await this.withSlotWrite(resourceWithId, async (repo) => {
-              await repo.ensureNoSlotConflict(resourceWithId);
-              return repo.updateResourceImpl(resourceWithId, true);
-            })
-          : await this.updateResourceImpl(resourceWithId, true);
+      const result = await this.updateResourceImpl(resourceWithId, true);
       const durationMs = Date.now() - startTime;
 
       await this.postCommit(async () => {
@@ -719,7 +681,7 @@ export class Repository extends FhirRepository implements Disposable {
     return resource;
   }
 
-  async readReferences<T extends Resource>(references: readonly Reference<T>[]): Promise<(WithId<T> | Error)[]> {
+  async readReferences<T extends Resource>(references: Reference<T>[]): Promise<(WithId<T> | Error)[]> {
     await this.recordFhirQuota(references.length * FhirQuotaCost.READ);
     const cacheEntries = await this.getCacheEntries(references);
     const result: (WithId<T> | Error)[] = new Array(references.length);
@@ -967,36 +929,7 @@ export class Repository extends FhirRepository implements Disposable {
     const startTime = Date.now();
     try {
       let result: WithId<T>;
-      const authenticatedAppointment =
-        resource.resourceType === 'Appointment' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      const authenticatedSlot =
-        resource.resourceType === 'Slot' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      const authenticatedSchedule =
-        resource.resourceType === 'Schedule' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      const authenticatedMembership =
-        resource.resourceType === 'ProjectMembership' && tryGetRequestContext() instanceof AuthenticatedRequestContext;
-      if (authenticatedAppointment) {
-        result = await this.withAppointmentWrite(resource, async (repo) => {
-          await repo.ensureAppointmentCancellationAllowed(resource);
-          await repo.ensureNoAppointmentConflict(resource, resource.id);
-          return repo.updateResourceImpl(resource, false, options);
-        });
-      } else if (authenticatedSlot) {
-        result = await this.withSlotWrite(resource, async (repo) => {
-          await repo.ensureNoSlotConflict(resource, resource.id);
-          return repo.updateResourceImpl(resource, false, options);
-        });
-      } else if (authenticatedSchedule) {
-        result = await this.withScheduleWrite(resource, async (repo) => {
-          await repo.ensureScheduleMutationAllowed(resource);
-          return repo.updateResourceImpl(resource, false, options);
-        });
-      } else if (authenticatedMembership) {
-        result = await this.withProjectMembershipWrite(resource, async (repo) => {
-          await repo.ensureActiveProjectAdmin(resource);
-          return repo.updateResourceImpl(resource, false, options);
-        });
-      } else if (options?.ifMatch) {
+      if (options?.ifMatch) {
         // Conditional update requires transaction
         result = await this.withTransaction((txRepo) => txRepo.updateResourceImpl(resource, false, options), {
           resourceTypes: resource.resourceType,
@@ -1013,295 +946,6 @@ export class Repository extends FhirRepository implements Disposable {
       const durationMs = Date.now() - startTime;
       this.logEvent(UpdateInteraction, AuditEventOutcome.MinorFailure, err, { resource, durationMs });
       throw err;
-    }
-  }
-
-  private async withProjectMembershipWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
-    const run = async (repo: this): Promise<TResult> => {
-      const membership = resource as ProjectMembership;
-      const existing = membership.id
-        ? await repo.readResource<ProjectMembership>('ProjectMembership', membership.id)
-        : undefined;
-      const projectId = resolveId(existing?.project ?? membership.project);
-      if (projectId) {
-        await repo.executeRawSql(
-          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-          [`${projectId}:ProjectMembership:active-admin`],
-          { resourceTypes: 'ProjectMembership', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockProjectAdmin' }
-        );
-      }
-      return callback(repo);
-    };
-    if (this.transaction) return run(this);
-    return this.withTransaction(run, {
-      resourceTypes: 'ProjectMembership',
-      isolationLevel: 'READ COMMITTED',
-      source: 'repo.projectMembershipWrite',
-    });
-  }
-
-  private async ensureActiveProjectAdmin(resource: Resource): Promise<void> {
-    if (resource.resourceType !== 'ProjectMembership' || !resource.id) return;
-    const next = resource as ProjectMembership;
-    if (next.admin === true && next.active !== false) return;
-    const current = await this.readResource<ProjectMembership>('ProjectMembership', next.id);
-    if (current.admin !== true || current.active === false) return;
-    const projectId = resolveId(current.project);
-    if (!projectId) return;
-    let hasOtherActiveAdmin = false;
-    await this.processAllResources<ProjectMembership>(
-      { resourceType: 'ProjectMembership', project: `Project/${projectId}` },
-      async (membership) => {
-        if (membership.id !== current.id && membership.admin === true && membership.active !== false) {
-          hasOtherActiveAdmin = true;
-        }
-      }
-    );
-    if (!hasOtherActiveAdmin) {
-      throw new OperationOutcomeError(badRequest('A project must keep at least one active administrator.'));
-    }
-  }
-
-  private async ensureNoAppointmentConflict(resource: Resource, excludeId?: string): Promise<void> {
-    if (resource.resourceType !== 'Appointment' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
-      return;
-    }
-    const conflict = await findAppointmentConflict(this, resource as Appointment, excludeId);
-    if (conflict) {
-      throw new OperationOutcomeError({
-        resourceType: 'OperationOutcome',
-        issue: [
-          {
-            severity: 'error',
-            code: 'conflict',
-            details: { text: 'Practitioner is already booked during the requested time.' },
-          },
-        ],
-      });
-    }
-  }
-
-  private async ensureNoSlotConflict(resource: Resource, excludeId?: string): Promise<void> {
-    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
-    const slot = resource as Slot;
-    const scheduleReference = slot.schedule?.reference;
-    let retiringExistingFreeSlot = false;
-    if (slot.id) {
-      const existingSlot = await this.readResource<Slot>('Slot', slot.id);
-      retiringExistingFreeSlot = existingSlot.status === 'free' && slot.status === 'busy-unavailable';
-      if (
-        (existingSlot.schedule?.reference !== scheduleReference ||
-          existingSlot.start !== slot.start ||
-          existingSlot.end !== slot.end) &&
-        (await findAppointmentForSlot(this, slot.id))
-      ) {
-        throw new OperationOutcomeError(badRequest('Cannot change the schedule or time of a Slot referenced by an active Appointment.'));
-      }
-    }
-    if (scheduleReference?.startsWith('Schedule/')) {
-      const start = slot.start ? new Date(slot.start).getTime() : Number.NaN;
-      const end = slot.end ? new Date(slot.end).getTime() : Number.NaN;
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-        throw new OperationOutcomeError(badRequest('Slot must have a valid start and end time.'));
-      }
-    }
-    if (scheduleReference?.startsWith('Schedule/')) {
-      const scheduleId = scheduleReference.slice('Schedule/'.length);
-      const schedule = await this.readResource<Schedule>('Schedule', scheduleId);
-      if (schedule.active === false) {
-        throw new OperationOutcomeError(badRequest('Cannot create or update a Slot in an inactive Schedule.'));
-      }
-      if (!schedule.actor?.some((actor) => actor.reference?.startsWith('Practitioner/'))) {
-        throw new OperationOutcomeError(badRequest('Schedule must reference a Practitioner before it can contain Slots.'));
-      }
-      const practitionerReferences = schedule.actor
-        .map((actor) => actor.reference)
-        .filter((reference): reference is string => reference?.startsWith('Practitioner/') ?? false);
-      for (const practitionerReference of practitionerReferences) {
-        const practitionerId = practitionerReference.slice('Practitioner/'.length);
-        const practitioner = await this.readResource<Practitioner>('Practitioner', practitionerId);
-        if (practitioner.active === false && !retiringExistingFreeSlot) {
-          throw new OperationOutcomeError(badRequest('Cannot create or update a Slot for an inactive Practitioner.'));
-        }
-      }
-      if (!retiringExistingFreeSlot && (await findAppointmentConflictForSlot(this, slot, practitionerReferences))) {
-        throw new OperationOutcomeError({
-          resourceType: 'OperationOutcome',
-          issue: [
-            {
-              severity: 'error',
-              code: 'conflict',
-              details: { text: 'Slot overlaps an active Appointment for this Practitioner.' },
-            },
-          ],
-        });
-      }
-    }
-    if (slot.status === 'free' && slot.id && (await findAppointmentForSlot(this, slot.id))) {
-      throw new OperationOutcomeError(badRequest('Cannot mark a Slot free while an active Appointment references it.'));
-    }
-    if (slot.status === 'entered-in-error' && slot.id && (await findActiveAppointmentForSlot(this, slot.id))) {
-      throw new OperationOutcomeError(badRequest('Cannot invalidate a Slot referenced by an active Appointment.'));
-    }
-    if (!retiringExistingFreeSlot && (await findSlotConflict(this, slot, excludeId))) {
-      throw new OperationOutcomeError({
-        resourceType: 'OperationOutcome',
-        issue: [
-          {
-            severity: 'error',
-            code: 'conflict',
-            details: { text: 'Schedule already has an overlapping Slot.' },
-          },
-        ],
-      });
-    }
-  }
-
-  private async ensureScheduleMutationAllowed(resource: Resource): Promise<void> {
-    if (
-      resource.resourceType !== 'Schedule' ||
-      !resource.id ||
-      !(tryGetRequestContext() instanceof AuthenticatedRequestContext)
-    ) {
-      return;
-    }
-    const schedule = resource as Schedule;
-    const current = await this.readResource<Schedule>('Schedule', schedule.id);
-    const currentActors = (current.actor ?? []).map((actor) => actor.reference ?? '').sort();
-    const nextActors = (schedule.actor ?? []).map((actor) => actor.reference ?? '').sort();
-    if (current.active === schedule.active && currentActors.join('|') === nextActors.join('|')) return;
-
-    let hasFutureFreeSlot = false;
-    await this.processAllResources<Slot>(
-      {
-        resourceType: 'Slot',
-        schedule: `Schedule/${schedule.id}`,
-        status: 'free',
-        start: `ge${new Date().toISOString()}`,
-      },
-      async () => {
-        hasFutureFreeSlot = true;
-      }
-    );
-    if (hasFutureFreeSlot) {
-      throw new OperationOutcomeError(
-        badRequest('Retire future free Slots before changing the Schedule status or Practitioner actors.')
-      );
-    }
-  }
-
-  private async withScheduleWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
-    const run = async (repo: this): Promise<TResult> => {
-      await repo.lockSchedule(resource);
-      return callback(repo);
-    };
-    if (this.transaction) return run(this);
-    return this.withTransaction(run, {
-      resourceTypes: 'Schedule',
-      isolationLevel: 'READ COMMITTED',
-      source: 'repo.scheduleWrite',
-    });
-  }
-
-  private async lockSchedule(resource: Resource): Promise<void> {
-    if (resource.resourceType !== 'Schedule' || !resource.id || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
-      return;
-    }
-    const projectId = this.currentProject()?.id;
-    if (!projectId) return;
-    await this.executeRawSql(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [`${projectId}:Schedule/${resource.id}`],
-      { resourceTypes: 'Schedule', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSchedule' }
-    );
-  }
-
-  private async withSlotWrite<TResult>(resource: Resource, callback: (repo: this) => Promise<TResult>): Promise<TResult> {
-    const run = async (repo: this): Promise<TResult> => {
-      await repo.lockSlotSchedule(resource);
-      return callback(repo);
-    };
-    if (this.transaction) return run(this);
-    return this.withTransaction(run, {
-      resourceTypes: 'Slot',
-      isolationLevel: 'READ COMMITTED',
-      source: 'repo.slotWrite',
-    });
-  }
-
-  private async lockSlotSchedule(resource: Resource): Promise<void> {
-    if (resource.resourceType !== 'Slot' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) return;
-    const projectId = this.currentProject()?.id;
-    const scheduleReference = (resource as Slot).schedule?.reference;
-    if (!projectId || !scheduleReference) return;
-    const lockKeys = new Set([`${projectId}:${scheduleReference}`]);
-    const scheduleMatch = /^Schedule\/([^/]+)$/.exec(scheduleReference);
-    if (scheduleMatch) {
-      const schedule = await this.readResource<Schedule>('Schedule', scheduleMatch[1]);
-      for (const actor of schedule.actor ?? []) {
-        if (actor.reference?.startsWith('Practitioner/')) lockKeys.add(`${projectId}:${actor.reference}`);
-      }
-    }
-    for (const lockKey of Array.from(lockKeys).sort()) {
-      await this.executeRawSql(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [lockKey],
-        { resourceTypes: 'Slot', operation: 'write', mode: DatabaseMode.WRITER, source: 'repo.lockSlotSchedule' }
-      );
-    }
-  }
-
-  private async ensureAppointmentCancellationAllowed(resource: Resource): Promise<void> {
-    if (
-      resource.resourceType !== 'Appointment' ||
-      resource.status !== 'cancelled' ||
-      !resource.id ||
-      !(tryGetRequestContext() instanceof AuthenticatedRequestContext)
-    ) {
-      return;
-    }
-    const current = await this.readResource<Appointment>('Appointment', resource.id);
-    if (current.status === 'cancelled') return;
-    const cancellableStatuses = new Set(['proposed', 'pending', 'booked', 'waitlist']);
-    const start = current.start ? new Date(current.start).getTime() : Number.NaN;
-    if (!cancellableStatuses.has(current.status ?? '') || !Number.isFinite(start) || start <= Date.now()) {
-      throw new OperationOutcomeError(badRequest('Only future scheduled appointments can be cancelled.'));
-    }
-  }
-
-  private async withAppointmentWrite<TResult>(
-    resource: Resource,
-    callback: (repo: this) => Promise<TResult>
-  ): Promise<TResult> {
-    const run = async (repo: this): Promise<TResult> => {
-      await repo.lockAppointmentPractitioners(resource);
-      return callback(repo);
-    };
-    if (this.transaction) return run(this);
-    return this.withTransaction(run, {
-      resourceTypes: 'Appointment',
-      isolationLevel: 'READ COMMITTED',
-      source: 'repo.appointmentWrite',
-    });
-  }
-
-  private async lockAppointmentPractitioners(resource: Resource): Promise<void> {
-    if (resource.resourceType !== 'Appointment' || !(tryGetRequestContext() instanceof AuthenticatedRequestContext)) {
-      return;
-    }
-    const projectId = this.currentProject()?.id;
-    if (!projectId) return;
-    for (const actor of getAppointmentPractitionerReferences(resource)) {
-      await this.executeRawSql(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`${projectId}:${actor}`],
-        {
-          resourceTypes: 'Appointment',
-          operation: 'write',
-          mode: DatabaseMode.WRITER,
-          source: 'repo.lockAppointmentPractitioner',
-        }
-      );
     }
   }
 
@@ -1340,12 +984,22 @@ export class Repository extends FhirRepository implements Disposable {
     create: boolean,
     options?: UpdateResourceOptions
   ): Promise<WithId<T>> {
-    // Validation must read the writer to avoid replica lag.
+    // Promote before pre-commit validation and existing-resource reads.
     this.setMode(RepositoryMode.WRITER);
     const interaction = create ? AccessPolicyInteraction.CREATE : AccessPolicyInteraction.UPDATE;
     let validatedResource = this.checkResourcePermissions(resource, interaction);
     this.validateBinarySecurityContext(validatedResource);
     const { resourceType, id } = validatedResource;
+
+    const preCommitResult = await preCommitValidation(this, validatedResource, 'update');
+
+    if (
+      isResourceWithId(preCommitResult, validatedResource.resourceType) &&
+      preCommitResult.id === validatedResource.id
+    ) {
+      validatedResource = this.checkResourcePermissions(preCommitResult, interaction);
+      this.validateBinarySecurityContext(validatedResource);
+    }
 
     const existing = create ? undefined : await this.checkExistingResource<T>(resourceType, id);
     if (existing) {
@@ -1393,6 +1047,22 @@ export class Repository extends FhirRepository implements Disposable {
     // Validate resource after all modifications and touchups above are done
     await validateRepositoryResource(this, result);
     // If this is a Subscription resource we are creating, we want to make sure the user is not over their per-user limit
+    if (create && result.resourceType === 'Subscription' && result.channel?.type === 'websocket') {
+      const projectId = result.meta?.project;
+      const author = result.meta?.author?.reference;
+      if (!(projectId && author)) {
+        throw new OperationOutcomeError(badRequest('No project or author connected to the specified Subscription.'));
+      }
+      const project = await this.getProjectById(projectId);
+      assert(project);
+      try {
+        await checkWebSocketSubscriptionLimit(project, author);
+      } catch {
+        await cleanupUserSubs(author);
+        await checkWebSocketSubscriptionLimit(project, author);
+      }
+    }
+
     if (this.context.checkReferencesOnWrite) {
       await this.preCommit(async () => {
         await validateResourceReferences(this, result);
@@ -1411,6 +1081,12 @@ export class Repository extends FhirRepository implements Disposable {
 
     await this.handleStorage(result, create);
     await this.postCommit(async () => this.handleBinaryUpdate(existing, result));
+    if (!this.context.skipBackgroundJobs) {
+      await this.postCommit(async () => {
+        const project = await this.getProjectById(projectId);
+        await addBackgroundJobs(result, existing, { project, interaction });
+      });
+    }
 
     const output = deepClone(result);
     return this.removeHiddenFields(output);
@@ -1633,113 +1309,48 @@ export class Repository extends FhirRepository implements Disposable {
   }
 
   /**
-   * Restores archived versions of one resource type, preserving ids, version ids, and meta.
-   * Inserts each version into history, then rebuilds the current row from the latest stored version.
-   * Idempotent, and does not trigger subscriptions or bots.
-   * This is only available to super admins.
-   * @param resourceType - The FHIR resource type.
-   * @param projectId - The project being restored. Every version must belong to it.
-   * @param versions - The archived versions.
+   * Resends subscriptions for the resource.
+   * This is only available to the admin accounts.
+   * This should not result in any change to the resource or its history.
+   * @param resourceType - The resource type.
+   * @param id - The resource ID.
+   * @param options - Additional options.
+   * @returns Promise to complete.
    */
-  async restoreResourceVersions(resourceType: ResourceType, projectId: string, versions: Resource[]): Promise<void> {
-    this.assertUsable();
-    // Protected types are server-wide (e.g. JsonWebKey signing keys), so an archive must never contain them
-    if (!this.isSuperAdmin() || protectedResourceTypes.includes(resourceType)) {
-      throw new OperationOutcomeError(forbidden);
-    }
-    // Super admin Project fields come from the target, never the archive, so reruns keep what the operator set
-    let existingProject: Project | undefined;
-    if (resourceType === 'Project') {
-      const [row] = await this.sqlRead<{ content: string }>(
-        new SelectQuery('Project').column('content').where('id', '=', projectId),
-        'Project',
-        { mode: DatabaseMode.WRITER }
-      );
-      existingProject = row ? (parseHistoryContent(row.content) as Project) : undefined;
-    }
-    const restored = versions.map((v) => {
-      if (v.resourceType !== resourceType || !isRestorableToProject(v, projectId)) {
-        throw new OperationOutcomeError(
-          badRequest(`${v.resourceType}/${v.id} does not belong to Project/${projectId}`)
-        );
-      }
-      return v.resourceType === 'Project' ? replaceSuperAdminProjectFields(v, existingProject) : v;
-    });
-    const ids = [...new Set(versions.map((v) => v.id as string))];
-
-    await this.withTransaction(
-      async (txRepo) => {
-        const conflicts = await txRepo.sqlRead<{ id: string }>(
-          new SelectQuery(resourceType).column('id').where('id', 'IN', ids).where('projectId', '!=', projectId),
-          resourceType,
-          { mode: DatabaseMode.WRITER }
-        );
-        if (conflicts.length) {
-          throw new OperationOutcomeError(badRequest(`${resourceType}/${conflicts[0].id} belongs to another project`));
-        }
-
-        await txRepo.sqlWrite(
-          new InsertQuery(
-            resourceType + '_History',
-            restored.map((v) => ({
-              id: v.id,
-              versionId: v.meta?.versionId,
-              lastUpdated: v.meta?.lastUpdated,
-              content: stringify(v),
-            }))
-          ).ignoreOnConflict(),
-          resourceType
-        );
-
-        // Latest per id from the database, so reruns and versions split across batches resolve correctly
-        const latest = await txRepo.sqlRead<Omit<HistoryRow, 'versionId'>>(
-          new SelectQuery(resourceType + '_History')
-            .distinctOn('id')
-            .column('id')
-            .column('lastUpdated')
-            .column('content')
-            .where('id', 'IN', ids)
-            .orderBy('id')
-            .orderBy('lastUpdated', true)
-            .orderBy('versionId', true),
-          resourceType,
-          { mode: DatabaseMode.WRITER }
-        );
-
-        const current: WithId<Resource>[] = [];
-        const deleted: { id: string; lastUpdated: Date }[] = [];
-        for (const row of latest) {
-          const resource = parseHistoryContent(row.content) as WithId<Resource>;
-          if (resource.meta?.deleted) {
-            deleted.push(row);
-          } else {
-            current.push(resource);
-          }
-        }
-        if (deleted.length) {
-          const deletedRows = deleted.map((row) =>
-            buildDeletedResourceRow(
-              { resourceType, id: row.id, meta: { project: projectId } } as WithId<Resource>,
-              row.lastUpdated
-            )
-          );
-          await txRepo.sqlWrite(new InsertQuery(resourceType, deletedRows).mergeOnConflict(), resourceType);
-          for (const row of deleted) {
-            await txRepo.deleteFromLookupTables({ resourceType, id: row.id } as WithId<Resource>);
-          }
-        }
-        await txRepo.reindexResources(current);
-      },
-      { resourceTypes: resourceType, source: 'repo.restoreResourceVersions' }
-    );
-    await this.deleteCacheEntries(resourceType, ids);
-  }
-
-  async deleteResource<T extends Resource = Resource>(
+  async resendSubscriptions<T extends Resource = Resource>(
     resourceType: T['resourceType'],
     id: string,
-    options?: DeleteResourceOptions
+    options?: ResendSubscriptionsOptions
   ): Promise<void> {
+    this.assertUsable();
+    if (!this.isSuperAdmin() && !this.isProjectAdmin()) {
+      throw new OperationOutcomeError(forbidden);
+    }
+
+    const resource = await this.readResourceImpl<T>(resourceType, id);
+    const interaction = options?.interaction ?? 'update';
+    let previousVersion: T | undefined;
+
+    if (interaction === 'update') {
+      const history = await this.readHistory(resourceType, id, { limit: 2 });
+      if (history.entry?.[0]?.resource?.meta?.versionId !== resource.meta?.versionId) {
+        throw new OperationOutcomeError(preconditionFailed);
+      }
+      previousVersion = history.entry?.[1]?.resource;
+    }
+
+    return addSubscriptionJobs(
+      resource,
+      previousVersion,
+      {
+        project: await this.getProjectById(resource.meta?.project),
+        interaction,
+      },
+      options
+    );
+  }
+
+  async deleteResource<T extends Resource = Resource>(resourceType: T['resourceType'], id: string): Promise<void> {
     await this.recordFhirQuota(FhirQuotaCost.WRITE);
 
     const startTime = Date.now();
@@ -1751,11 +1362,6 @@ export class Repository extends FhirRepository implements Disposable {
     } catch (err) {
       const outcomeErr = err as OperationOutcomeError;
       if (isGone(outcomeErr.outcome)) {
-        if (options?.ifMatch) {
-          // Trying to delete something that was already deleted tells us that someone mutated this
-          // since our requested version; report that error.
-          throw new OperationOutcomeError(preconditionFailed);
-        }
         return; // Resource is already deleted, return successfully
       }
       throw err;
@@ -1765,9 +1371,8 @@ export class Repository extends FhirRepository implements Disposable {
       if (!this.canPerformInteraction(AccessPolicyInteraction.DELETE, resource)) {
         throw new OperationOutcomeError(forbidden);
       }
-      if (options?.ifMatch && resource.meta?.versionId !== options.ifMatch) {
-        throw new OperationOutcomeError(preconditionFailed);
-      }
+
+      await preCommitValidation(this, resource, 'delete');
 
       await this.deleteCacheEntry(resourceType, id);
 
@@ -1797,15 +1402,6 @@ export class Repository extends FhirRepository implements Disposable {
       if (!this.isCacheOnly(resource)) {
         await this.ensureInTransaction(
           async (txRepo) => {
-            if (options?.ifMatch) {
-              // Re-check against the snapshot this transaction writes from. A write committed after this
-              // read fails the upsert below with a serialization error, and the retry lands back here.
-              const current = await txRepo.readResourceFromDatabase<T>(resourceType, id);
-              if (current.meta?.versionId !== options.ifMatch) {
-                throw new OperationOutcomeError(preconditionFailed);
-              }
-            }
-
             // FHIR logical delete: retain history and append a new deleted version. Instance
             // reads and vread of that version return HTTP 410 Gone; prior versions stay readable.
             const versionId = txRepo.generateId();
@@ -1849,6 +1445,13 @@ export class Repository extends FhirRepository implements Disposable {
           },
           { resourceTypes: resourceType, source: 'repo.deleteResource' }
         );
+      }
+
+      if (!this.context.skipBackgroundJobs) {
+        await addBackgroundJobs(resource, resource, {
+          project: await this.getProjectById(resource.meta?.project),
+          interaction: 'delete',
+        });
       }
     } catch (err) {
       const durationMs = Date.now() - startTime;
@@ -2705,7 +2308,7 @@ export class Repository extends FhirRepository implements Disposable {
       // but that isn't currently enforced at write time, so exclude them here
       if (original && !field.includes('.') && !field.endsWith('[x]')) {
         const value = original[field as keyof T];
-        if (Object.prototype.hasOwnProperty.call(original, field)) {
+        if (value) {
           input[field as keyof T] = value;
         }
       }
@@ -2780,7 +2383,7 @@ export class Repository extends FhirRepository implements Disposable {
     const auditEvent = createAuditEvent(
       RestfulOperationType,
       subtype,
-      this.context.projects?.[0],
+      this.context.projects?.[0]?.id as string,
       this.context.author,
       this.context.remoteAddress,
       outcome,
@@ -2797,10 +2400,6 @@ export class Repository extends FhirRepository implements Disposable {
 
     if (getConfig().saveAuditEvents && isResource(resource) && resource?.resourceType !== 'AuditEvent') {
       auditEvent.id = this.generateId();
-      const profile = this.currentProject()?.defaultProfile?.find((o) => o.resourceType === 'AuditEvent')?.profile;
-      if (profile?.length) {
-        auditEvent.meta = { ...auditEvent.meta, profile };
-      }
       // Clone the repository to obtain a separate RepositoryConnection for two reasons:
       // 1. the un-awaited save must outlive the current repo's connection scope, which is marked 'ended'
       // and closed/unusable as soon as post-commit callbacks returns (before the un-awaited save completes).
@@ -2808,21 +2407,11 @@ export class Repository extends FhirRepository implements Disposable {
       // mainline transactions started on the current Repository and cause one of them to fail.
       // To reduce AuditEvent overhead, we could consider further decoupling AuditEvent saves from request processing
       // by pushing them onto an in-process queue (or BullMQ) and drain/write them to the DB on an interval.
-      const accountsRepo = this.clone();
-      const saveRepo = this.clone({ skipBackgroundJobs: true }).getSystemRepo();
-      accountsRepo
-        .getAccounts(undefined, auditEvent as WithId<AuditEvent>)
-        .then((accounts) => {
-          if (accounts) {
-            auditEvent.meta = { ...auditEvent.meta, account: accounts[0], accounts };
-          }
-          return saveRepo.updateResourceImpl(auditEvent, true);
-        })
+      const saveRepo = this.clone({ skipBackgroundJobs: true });
+      saveRepo
+        .updateResourceImpl(auditEvent, true)
         .catch((err) => getLogger().error('Failed to save AuditEvent', err))
-        .finally(() => {
-          accountsRepo[Symbol.dispose]();
-          saveRepo[Symbol.dispose]();
-        });
+        .finally(() => saveRepo[Symbol.dispose]());
     }
   }
 
@@ -2849,12 +2438,6 @@ export class Repository extends FhirRepository implements Disposable {
     options: TransactionSqlOptions
   ): Promise<TResult> {
     this.assertUsable();
-    const transactionOptions =
-      !options.isolationLevel &&
-      !options.serializable &&
-      ['Appointment', 'Slot'].some((resourceType) => normalizeResourceTypes(options.resourceTypes).has(resourceType))
-        ? { ...options, serializable: true }
-        : options;
     // Resolving up front is what binds the transaction to a shard: BEGIN must be sent to one
     // database, and connectionFor rejects any later statement that resolves elsewhere.
     // Concurrent calls targeting different shards are safe: each gets its own connection, and the
@@ -2870,7 +2453,7 @@ export class Repository extends FhirRepository implements Disposable {
         const txnScopedRepo = this.createTransactionScopedRepo(shardId, txScope);
         return callback(txnScopedRepo);
       },
-      transactionOptions
+      options
     );
   }
 
@@ -2950,8 +2533,7 @@ export class Repository extends FhirRepository implements Disposable {
       return undefined;
     }
     this.recordCacheAccess('read', resourceType, 'repo.getCacheEntry');
-    const entry = await getResourceCacheEntry<T>(resourceType, id);
-    return this.cacheEntryOnShard(entry);
+    return getResourceCacheEntry<T>(resourceType, id);
   }
 
   /**
@@ -2959,31 +2541,14 @@ export class Repository extends FhirRepository implements Disposable {
    * @param references - Array of FHIR references.
    * @returns Array of cache entries or undefined.
    */
-  private async getCacheEntries(references: readonly Reference[]): Promise<(CacheEntry | undefined)[]> {
+  private async getCacheEntries(references: Reference[]): Promise<(CacheEntry | undefined)[]> {
     // No cache access allowed mid-transaction
     if (this.inOwnTransaction()) {
       return new Array(references.length);
     }
 
     this.recordCacheAccess('read', getResourceTypesFromReferences(references), 'repo.getCacheEntries');
-    const entries = await getResourceCacheEntries(references);
-    for (let i = 0; i < entries.length; i++) {
-      entries[i] = this.cacheEntryOnShard(entries[i]);
-    }
-    return entries;
-  }
-
-  /**
-   * An entry cached by a repository on another shard is a copy this repository's database may not hold,
-   * so reads treat it as a miss.
-   * @param entry - The cache entry.
-   * @returns The entry if it was cached from the shard this repository reads its resource type from.
-   */
-  private cacheEntryOnShard<T extends Resource>(entry: CacheEntry<T> | undefined): CacheEntry<T> | undefined {
-    if (entry) {
-      return entry.shardId === getResourceTypeShardId(this.shardId, entry.resource.resourceType) ? entry : undefined;
-    }
-    return undefined;
+    return getResourceCacheEntries(references);
   }
 
   /**
@@ -3003,7 +2568,7 @@ export class Repository extends FhirRepository implements Disposable {
     }
 
     this.recordCacheAccess('write', resource.resourceType, 'repo.setCacheEntry');
-    await setResourceCacheEntry(resource, getResourceTypeShardId(this.shardId, resource.resourceType), options);
+    await setResourceCacheEntry(resource, options);
   }
 
   /**
@@ -3297,58 +2862,3 @@ const patchOperationDefinition: OperationDefinition = {
 };
 
 const SuperAdminProjectIdEditableResourceTypes = ['User', 'Subscription'];
-
-/**
- * Returns true if an archived version belongs to the project being restored.
- * Besides meta.project, checks the fields that login and access control use to resolve a project,
- * so a crafted archive cannot grant itself access to another project.
- * @param resource - The archived version.
- * @param projectId - The project being restored.
- * @returns True if the version belongs to the project.
- */
-function isRestorableToProject(resource: Resource, projectId: string): boolean {
-  if (resource.meta?.deleted) {
-    // Older tombstones have no meta.project; the conflict check still protects other projects
-    return (resource.meta.project ?? projectId) === projectId;
-  }
-  if (resource.meta?.project !== projectId) {
-    return false;
-  }
-  switch (resource.resourceType) {
-    case 'Project':
-      return resource.id === projectId;
-    case 'ProjectMembership':
-    case 'User':
-      return resolveId(resource.project) === projectId;
-    default:
-      return true;
-  }
-}
-
-const superAdminProjectFields = [
-  'active',
-  'superAdmin',
-  'features',
-  'link',
-  'systemSetting',
-  'systemSecret',
-  'strictMode',
-] as const;
-
-/**
- * Replaces the Project fields that only super admins can set with the target's current values.
- * @param project - The archived Project version.
- * @param existing - The target's current Project, if any.
- * @returns The Project with the target's super admin fields.
- */
-function replaceSuperAdminProjectFields(project: Project, existing: Project | undefined): Project {
-  const result = { ...project };
-  for (const field of superAdminProjectFields) {
-    if (existing?.[field] === undefined) {
-      delete result[field];
-    } else {
-      Object.assign(result, { [field]: existing[field] });
-    }
-  }
-  return result;
-}

@@ -132,7 +132,7 @@ async function replaceExisting<T extends Resource & { url?: string }>(
   projectId: string
 ): Promise<WithId<T>> {
   const systemRepo = repo.getSystemRepo();
-  return systemRepo.ensureInTransaction(
+  return systemRepo.withTransaction(
     async (systemRepo) => {
       if (resource.url) {
         const bundle = await systemRepo.search({

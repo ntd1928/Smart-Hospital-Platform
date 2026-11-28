@@ -26,8 +26,9 @@ import type {
   Resource,
   Subscription,
 } from '@medplum/fhirtypes';
+import type { BotExecutionRequest } from '../bots/types';
 import { getConfig } from '../config/loader';
-import { buildTracingExtension } from '../context';
+import { AuthenticatedRequestContext, buildTracingExtension, tryGetRequestContext } from '../context';
 import type { SystemRepository } from '../fhir/repo';
 import { getProjectSystemRepo } from '../fhir/repo';
 import { globalLogger } from '../logger';
@@ -195,7 +196,7 @@ export type AuditEventOutcome = (typeof AuditEventOutcome)[keyof typeof AuditEve
 export function createAuditEvent(
   type: AuditEventType,
   subtype: AuditEventSubtype,
-  project: WithId<Project> | undefined,
+  projectId: string,
   who: Reference | undefined,
   remoteAddress: string | undefined,
   outcome: AuditEventOutcome,
@@ -219,7 +220,7 @@ export function createAuditEvent(
   let entity: AuditEventEntity[] | undefined = undefined;
   if (options?.resource) {
     const what: Reference = isResource(options.resource) ? createReference(options.resource) : options.resource;
-    entity = [{ what: applyOptionalRedaction(what, project) }];
+    entity = [{ what: applyOptionalRedaction(what) }];
   } else if (options?.searchQuery) {
     entity = [{ query: options.searchQuery }];
   }
@@ -243,7 +244,7 @@ export function createAuditEvent(
 
   const agent: AuditEventAgent[] = [
     {
-      who: applyOptionalRedaction(who, project) as Reference<Practitioner>,
+      who: applyOptionalRedaction(who) as Reference<Practitioner>,
       requestor: true,
       network,
     },
@@ -256,7 +257,7 @@ export function createAuditEvent(
   // actor (e.g. client_credentials), it is already `agent[0]`, so skip it.
   if (options?.client?.reference && options.client.reference !== who?.reference) {
     agent.push({
-      who: applyOptionalRedaction(options.client, project) as Reference<ClientApplication>,
+      who: applyOptionalRedaction(options.client) as Reference<ClientApplication>,
       requestor: false,
       type: { coding: [ApplicationAgentType] },
     });
@@ -264,7 +265,7 @@ export function createAuditEvent(
 
   const auditEvent: AuditEvent = {
     resourceType: 'AuditEvent',
-    meta: { project: project?.id },
+    meta: { project: projectId },
     type,
     subtype: [subtype],
     action: AuditEventActionLookup[subtype.code],
@@ -294,30 +295,191 @@ function buildDurationExtension(duration: number): Extension {
   };
 }
 
-/**
- * Removes the display text from a reference if AuditEvents are redacted, server-wide or by the project.
- * @param ref - The reference to redact.
- * @param project - The project the AuditEvent is recorded in, if any.
- * @returns The reference, without display text if redacted.
- */
-export function applyOptionalRedaction(
-  ref: Reference | undefined,
-  project: Project | undefined
-): Reference | undefined {
-  if (getConfig().redactAuditEvents || project?.setting?.find((s) => s.name === 'redactAuditEvents')?.valueBoolean) {
+export function applyOptionalRedaction(ref: Reference | undefined): Reference | undefined {
+  const config = getConfig();
+  const ctx = tryGetRequestContext();
+  let project: Project | undefined;
+  if (ctx instanceof AuthenticatedRequestContext) {
+    project = ctx.project;
+  }
+  if (config.redactAuditEvents || project?.setting?.find((s) => s.name === 'redactAuditEvents')?.valueBoolean) {
     return { ...ref, display: undefined };
   } else {
     return ref;
   }
 }
 
-export function createAuditEventEntities(project: Project | undefined, ...resources: unknown[]): AuditEventEntity[] {
-  return flatMapFilter(resources, (v) => (isResourceWithId(v) ? createAuditEventEntity(v, project) : undefined));
+const defaultBotOutputLength = 10 * 1024; // 10 KiB
+
+/**
+ * Creates an AuditEvent for a Bot execution.
+ * @param request - The bot request.
+ * @param startTime - The time the execution attempt started.
+ * @param outcome - The outcome code.
+ * @param outcomeDesc - The outcome description text.
+ */
+export async function createBotAuditEvent(
+  request: BotExecutionRequest,
+  startTime: string,
+  outcome: AuditEventOutcome,
+  outcomeDesc: string
+): Promise<void> {
+  const { bot, runAs, requester, input, subscription, cron, agent, device } = request;
+  const trigger = bot.auditEventTrigger ?? 'always';
+  if (
+    trigger === 'never' ||
+    (trigger === 'on-error' && outcome === AuditEventOutcome.Success) ||
+    (trigger === 'on-output' && outcomeDesc.length === 0)
+  ) {
+    return;
+  }
+
+  let extension: Extension[] | undefined;
+  const tracingExt = buildTracingExtension();
+  if (tracingExt) {
+    extension = append(extension, tracingExt);
+  }
+  // The record lands in the project the run assumed, so its compartments have to belong to that
+  // project. A Cron always does -- its project is the one onBehalfOf's membership belongs to -- so
+  // when one triggered the run it defines them; the bot only does when it lives there too.
+  const auditProject = resolveId(runAs.project) as string;
+  const compartmentSource = cron ?? (bot.meta?.project === auditProject ? bot : undefined);
+  const auditEvent: AuditEvent = {
+    resourceType: 'AuditEvent',
+    meta: {
+      project: auditProject,
+      account: compartmentSource?.meta?.account,
+      accounts: compartmentSource?.meta?.accounts,
+    },
+    period: {
+      start: startTime,
+      end: new Date().toISOString(),
+    },
+    recorded: new Date().toISOString(),
+    type: { system: 'https://medplum.com/CodeSystem/audit-event', code: 'execute' },
+    agent: [
+      {
+        who: applyOptionalRedaction(requester) as Reference<ProfileResource>,
+        requestor: true,
+      },
+      {
+        who: applyOptionalRedaction(runAs.profile) as Reference<ProfileResource>,
+        requestor: false,
+      },
+    ],
+    source: { observer: applyOptionalRedaction(createReference(bot)) as Reference<Bot> },
+    entity: createAuditEventEntities(bot, input, subscription, agent, device),
+    outcome,
+    outcomeDesc,
+    extension,
+  };
+
+  const config = getConfig();
+  // Always emit to logs
+  logAuditEvent({
+    ...auditEvent,
+    outcomeDesc: tail(outcomeDesc, config.maxBotLogLengthForLogs ?? defaultBotOutputLength),
+  });
+  // Optionally write to the database (default if auditEventDestination is unset)
+  if (!bot.auditEventDestination || bot.auditEventDestination.includes('resource')) {
+    const systemRepo = await getProjectSystemRepo(runAs.project);
+    await systemRepo.createResource<AuditEvent>({
+      ...auditEvent,
+      outcomeDesc: tail(outcomeDesc, config.maxBotLogLengthForResource ?? defaultBotOutputLength),
+    });
+  }
 }
 
-export function createAuditEventEntity(resource: Resource, project: Project | undefined): AuditEventEntity {
+function tail(str: string, n: number): string {
+  return str.substring(str.length - n);
+}
+
+const SUBSCRIPTION_AUDIT_EVENT_DESTINATION_URL =
+  'https://medplum.com/fhir/StructureDefinition/subscription-audit-event-destination';
+
+/**
+ * Creates an AuditEvent for a subscription attempt.
+ * @param systemRepo - The system repository.
+ * @param resource - The resource that triggered the subscription.
+ * @param startTime - The time the subscription attempt started.
+ * @param outcome - The outcome code.
+ * @param outcomeDesc - The outcome description text.
+ * @param subscription - Optional rest-hook subscription.
+ * @param bot - Optional bot that was executed.
+ */
+export async function createSubscriptionAuditEvent(
+  systemRepo: SystemRepository,
+  resource: Resource,
+  startTime: string,
+  outcome: AuditEventOutcome,
+  outcomeDesc: string,
+  subscription: Subscription,
+  bot?: Bot
+): Promise<void> {
+  let extension: Extension[] | undefined;
+  const tracingExt = buildTracingExtension();
+  if (tracingExt) {
+    extension = append(extension, tracingExt);
+  }
+  const auditEvent: AuditEvent = {
+    resourceType: 'AuditEvent',
+    meta: {
+      project: subscription.meta?.project,
+      account: subscription.meta?.account,
+      accounts: subscription.meta?.accounts,
+    },
+    period: {
+      start: startTime,
+      end: new Date().toISOString(),
+    },
+    recorded: new Date().toISOString(),
+    type: {
+      code: 'transmit',
+    },
+    agent: [
+      {
+        type: { text: subscription.resourceType },
+        requestor: false,
+      },
+    ],
+    source: {
+      observer: applyOptionalRedaction(createReference(subscription)) as Reference<Subscription>,
+    },
+    entity: createAuditEventEntities(resource, subscription, bot),
+    outcome,
+    outcomeDesc,
+    extension,
+  };
+
+  const destinations: string[] = [];
+  if (subscription?.extension) {
+    for (const ext of subscription.extension) {
+      if (ext.url === SUBSCRIPTION_AUDIT_EVENT_DESTINATION_URL && ext.valueCode) {
+        destinations.push(ext.valueCode);
+      }
+    }
+  }
+  const finalDestinations = destinations.length > 0 ? destinations : ['resource'];
+
+  for (const destination of finalDestinations) {
+    switch (destination) {
+      case 'resource':
+        await systemRepo.createResource(auditEvent);
+        break;
+      case 'log':
+        logAuditEvent(auditEvent);
+        break;
+    }
+  }
+}
+
+export function createAuditEventEntities(...resources: unknown[]): AuditEventEntity[] {
+  return flatMapFilter(resources, (v) => (isResourceWithId(v) ? createAuditEventEntity(v) : undefined));
+}
+
+export function createAuditEventEntity(resource: Resource): AuditEventEntity {
   return {
-    what: applyOptionalRedaction(createReference(resource), project),
+    what: applyOptionalRedaction(createReference(resource)),
     role: getAuditEventEntityRole(resource),
   };
 }

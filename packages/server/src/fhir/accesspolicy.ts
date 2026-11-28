@@ -6,13 +6,11 @@ import {
   createReference,
   EMPTY,
   getReferenceString,
-  getResourceTypes,
   isNotFound,
   isResource,
   isString,
   OperationOutcomeError,
   projectAdminResourceTypes,
-  readInteractions,
   resolveId,
 } from '@medplum/core';
 import type {
@@ -31,7 +29,6 @@ import type { AuthState } from '../oauth/middleware';
 import type { SystemRepository } from './repo';
 import { getGlobalSystemRepo, getProjectSystemRepo, Repository } from './repo';
 import { PLACEHOLDER_SHARD_ID } from './sharding';
-import { OPERATION_MANAGED_CLINICAL_RESOURCES } from './clinical-resources';
 import { applySmartScopes } from './smart';
 
 export type PopulatedAccessPolicy = AccessPolicy & { resource: AccessPolicyResource[] };
@@ -147,13 +144,6 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
 
   let accessPolicy = await buildAccessPolicy(membership);
 
-  const profileReference = getReferenceString(membership.profile);
-  if (!membership.admin && profileReference?.startsWith('Practitioner/')) {
-    accessPolicy = restrictPractitionerPatientAccess(accessPolicy, profileReference);
-  } else if (!membership.admin && profileReference?.startsWith('Patient/')) {
-    accessPolicy = restrictPatientSelfServiceAccess(accessPolicy, profileReference);
-  }
-
   if (login.scope) {
     // If the login specifies SMART scopes,
     // then set the access policy to use those scopes
@@ -164,146 +154,8 @@ export async function getAccessPolicyForLogin(authState: AuthState): Promise<Acc
   // This includes ensuring no admin rights for non-admins
   // and restricted access for admins
   accessPolicy = applyProjectAdminAccessPolicy(project, membership, accessPolicy);
-  accessPolicy = restrictClinicalWrites(accessPolicy);
 
   return accessPolicy;
-}
-
-/** Keeps clinical record writes behind server-side operations for every project user. */
-function restrictClinicalWrites(accessPolicy: PopulatedAccessPolicy): PopulatedAccessPolicy {
-  const resourcePolicies: AccessPolicyResource[] = [];
-  for (const rule of accessPolicy.resource) {
-    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
-    for (const resourceType of resourceTypes) {
-      const scopedRule: AccessPolicyResource = {
-        ...rule,
-        resourceType,
-        criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
-      };
-      if (OPERATION_MANAGED_CLINICAL_RESOURCES.has(resourceType)) {
-        const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
-        scopedRule.readonly = true;
-        scopedRule.interaction = interactions.filter((interaction) => !['create', 'update', 'delete'].includes(interaction));
-      }
-      resourcePolicies.push(scopedRule);
-    }
-  }
-  return { ...accessPolicy, resource: resourcePolicies };
-}
-
-const practitionerPatientCriteria: Record<string, string[]> = {
-  Patient: ['general-practitioner'],
-  AllergyIntolerance: ['patient:Patient.general-practitioner'],
-  Appointment: ['actor:Patient.general-practitioner'],
-  Condition: ['patient:Patient.general-practitioner'],
-  Encounter: ['patient:Patient.general-practitioner'],
-  MedicationAdministration: ['patient:Patient.general-practitioner'],
-  MedicationRequest: ['patient:Patient.general-practitioner'],
-  MedicationStatement: ['patient:Patient.general-practitioner'],
-  Observation: ['patient:Patient.general-practitioner'],
-};
-
-/**
- * Applies assignment-based restrictions to Practitioner repositories. Access policies are additive,
- * so wildcard grants must be expanded before criteria are applied to patient-specific resources.
- * @param accessPolicy - The populated access policy for the login.
- * @param practitionerReference - The authenticated Practitioner reference.
- * @returns An access policy restricted to assigned patient records and their clinical resources.
- */
-function restrictPractitionerPatientAccess(accessPolicy: PopulatedAccessPolicy, practitionerReference: string): PopulatedAccessPolicy {
-  const resourcePolicies: AccessPolicyResource[] = [];
-  for (const rule of accessPolicy.resource) {
-    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
-    for (const resourceType of resourceTypes) {
-      const scopedSearchParameters = practitionerPatientCriteria[resourceType];
-      const criteriaFragments = scopedSearchParameters?.map((parameter) => `${parameter}=${encodeURIComponent(practitionerReference)}`);
-      const baseCriteria = rule.criteria?.replace(/^\*\?/, `${resourceType}?`);
-      const queryIndex = baseCriteria?.indexOf('?') ?? -1;
-      const baseQuery = queryIndex >= 0 ? baseCriteria?.slice(queryIndex + 1) : undefined;
-      const compartment = rule.compartment ? resolveId(rule.compartment) : undefined;
-      const existingCriteria = [baseQuery, ...(compartment ? [`_compartment=${encodeURIComponent(compartment)}`] : [])].filter(Boolean);
-      const scopedRule: AccessPolicyResource = {
-        ...rule,
-        resourceType,
-        criteria: existingCriteria.length ? `${resourceType}?${existingCriteria.join('&')}` : undefined,
-        compartment: undefined,
-      };
-      if (scopedSearchParameters) {
-        scopedRule.readonlyFields = [...new Set([...(scopedRule.readonlyFields ?? []), ...(resourceType === 'Patient' ? ['generalPractitioner'] : [])])];
-        if (resourceType === 'MedicationStatement' || resourceType === 'MedicationRequest' || resourceType === 'AllergyIntolerance' || resourceType === 'Condition' || resourceType === 'Observation') {
-          scopedRule.readonly = true;
-          const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
-          scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete');
-        }
-        if (resourceType === 'Patient' && !scopedRule.readonly) {
-          const interactions = scopedRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
-          scopedRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'delete');
-        }
-        for (const criteria of criteriaFragments ?? []) {
-          resourcePolicies.push({ ...scopedRule, criteria: `${resourceType}?${[...existingCriteria, criteria].join('&')}` });
-        }
-      } else {
-        resourcePolicies.push(scopedRule);
-      }
-    }
-  }
-  return { ...accessPolicy, resource: resourcePolicies };
-}
-
-const patientSelfServiceReadonlyFields = [
-  'resourceType', 'id', '_id', 'meta', 'implicitRules', '_implicitRules', 'language', '_language', 'text', 'contained',
-  'extension', 'modifierExtension', 'identifier', 'active', '_active', 'name', '_name', 'gender', '_gender',
-  'birthDate', '_birthDate', 'deceasedBoolean', '_deceasedBoolean', 'deceasedDateTime', '_deceasedDateTime',
-  'maritalStatus', '_maritalStatus', 'multipleBirthBoolean', '_multipleBirthBoolean', 'multipleBirthInteger',
-  '_multipleBirthInteger', 'photo', 'contact', 'communication', 'generalPractitioner', 'managingOrganization', 'link',
-];
-
-/**
- * Restricts Patient edits to contact details and keeps medication/allergy history read-only.
- * @param accessPolicy - The populated access policy for the login.
- * @param patientReference - The authenticated Patient reference.
- * @returns An access policy limited to reading/searching clinical medication/allergy data and updating the patient's contact data.
- */
-function restrictPatientSelfServiceAccess(accessPolicy: PopulatedAccessPolicy, patientReference: string): PopulatedAccessPolicy {
-  const resourcePolicies: AccessPolicyResource[] = [];
-  for (const rule of accessPolicy.resource) {
-    const resourceTypes = rule.resourceType === '*' ? getResourceTypes() : [rule.resourceType];
-    for (const resourceType of resourceTypes) {
-      if (resourceType !== 'Patient') {
-        const readonlyClinicalResources = ['AllergyIntolerance', 'Condition', 'MedicationRequest', 'MedicationStatement', 'Observation'];
-        resourcePolicies.push({
-          ...rule,
-          resourceType,
-          criteria: rule.criteria?.replace(/^\*\?/, `${resourceType}?`),
-          ...(readonlyClinicalResources.includes(resourceType) ? { readonly: true } : {}),
-          ...(readonlyClinicalResources.includes(resourceType) && !rule.readonly
-            ? { interaction: (rule.interaction ?? [...readInteractions, 'create', 'update', 'delete']).filter((interaction) => interaction !== 'create' && interaction !== 'update' && interaction !== 'delete') }
-            : {}),
-        });
-        continue;
-      }
-      const baseCriteria = rule.criteria?.replace(/^\*\?/, 'Patient?');
-      const queryIndex = baseCriteria?.indexOf('?') ?? -1;
-      const baseQuery = queryIndex >= 0 ? baseCriteria?.slice(queryIndex + 1) : undefined;
-      const compartment = rule.compartment ? resolveId(rule.compartment) : undefined;
-      const criteria = [baseQuery, ...(compartment ? [`_compartment=${encodeURIComponent(compartment)}`] : []), `_id=${encodeURIComponent(resolveId({ reference: patientReference }) ?? '')}`]
-        .filter(Boolean)
-        .join('&');
-      const selfRule: AccessPolicyResource = {
-        ...rule,
-        resourceType: 'Patient',
-        criteria: `Patient?${criteria}`,
-        compartment: undefined,
-        readonlyFields: [...new Set([...(rule.readonlyFields ?? []), ...patientSelfServiceReadonlyFields])],
-      };
-      if (!selfRule.readonly) {
-        const interactions = selfRule.interaction ?? [...readInteractions, 'create', 'update', 'delete'];
-        selfRule.interaction = interactions.filter((interaction) => interaction !== 'create' && interaction !== 'delete');
-      }
-      resourcePolicies.push(selfRule);
-    }
-  }
-  return { ...accessPolicy, resource: resourcePolicies };
 }
 
 /**
@@ -495,14 +347,10 @@ function applyProjectAdminAccessPolicy(
     // Project admins can edit their own project
     accessPolicy.resource.push(
       {
-        resourceType: 'AccessPolicy',
-        criteria: `AccessPolicy?_project=${resolveId(membership.project)}`,
-      },
-      {
         // Project admins have full access to their own project, except for a few sensitive fields
         resourceType: 'Project',
         criteria: `Project?_id=${resolveId(membership.project)}`,
-        readonlyFields: ['active', 'features', 'link', 'systemSetting'],
+        readonlyFields: ['features', 'link', 'systemSetting'],
         hiddenFields: ['superAdmin', 'systemSecret', 'strictMode'],
         interaction: ['read', 'vread', 'update', 'history', 'create', 'search'], // Everything except delete
       },
@@ -546,18 +394,8 @@ function applyProjectAdminAccessPolicy(
       }
     );
   } else {
-    // Preserve policy reads, including wildcard grants, but never grant non-admins policy writes.
-    const policyReadRules = accessPolicy.resource
-      .filter((r) => r.resourceType === 'AccessPolicy' || r.resourceType === '*')
-      .map((r) => ({
-        ...r,
-        resourceType: 'AccessPolicy',
-        criteria: r.criteria?.replace(/^\*\?/, 'AccessPolicy?'),
-        interaction: r.interaction?.filter((i) => readInteractions.includes(i)) ?? [...readInteractions],
-      }));
-
-    accessPolicy.resource = accessPolicy.resource.filter((r) => !projectAdminResourceTypes.includes(r.resourceType));
-    accessPolicy.resource.push(...policyReadRules);
+    // Remove any references to project admin resource types
+    accessPolicy.resource = accessPolicy.resource?.filter((r) => !projectAdminResourceTypes.includes(r.resourceType));
   }
 
   return accessPolicy;

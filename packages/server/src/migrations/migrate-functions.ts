@@ -5,7 +5,6 @@ import { escapeIdentifier } from 'pg';
 import type { UpdateQuery } from '../fhir/sql';
 import { isValidPostgresIdentifier, SqlBuilder } from '../fhir/sql';
 import { globalLogger } from '../logger';
-import { getConnectionShardId } from '../sharding/connection-shard-id';
 import { getCheckConstraints } from './migrate';
 import { getColumns } from './migrate-utils';
 import type { CheckConstraintDefinition, MigrationActionResult } from './types';
@@ -167,7 +166,7 @@ export async function idempotentCreateIndex(
     const dropQuery = `DROP INDEX IF EXISTS ${escapeIdentifier(indexName)}`;
     await client.query(dropQuery);
     const durationMs = Date.now() - start;
-    globalLogger.debug('Dropped invalid index', { shardId: getConnectionShardId(client), indexName, durationMs });
+    globalLogger.debug('Dropped invalid index', { indexName, durationMs });
     results.push({ name: dropQuery, durationMs });
     exists = false;
   }
@@ -177,7 +176,7 @@ export async function idempotentCreateIndex(
     const start = Date.now();
     await client.query(createIndexSql);
     const durationMs = Date.now() - start;
-    globalLogger.debug('Created index', { shardId: getConnectionShardId(client), indexName, durationMs });
+    globalLogger.debug('Created index', { indexName, durationMs });
     results.push({ name: createIndexSql, durationMs });
   }
 }
@@ -191,7 +190,7 @@ export async function analyzeTable(
   const analyzeQuery = `ANALYZE ${escapeIdentifier(tableName)}`;
   await client.query(analyzeQuery);
   const durationMs = Date.now() - start;
-  globalLogger.debug('Analyzed table', { shardId: getConnectionShardId(client), tableName, durationMs });
+  globalLogger.debug('Analyzed table', { tableName, durationMs });
   actions.push({ name: analyzeQuery, durationMs });
 }
 

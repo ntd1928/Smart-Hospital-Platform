@@ -7,7 +7,6 @@ import type { ResourceType } from '@medplum/fhirtypes';
 import { DatabaseMode } from '../../database';
 import { getLogger } from '../../logger';
 import { globalShardResourceTypes } from '../sharding';
-import type { TransactionIsolationLevel } from '../sql';
 
 /**
  * Which store an access goes to. Both are shard-scoped: the resource cache is keyed per resource and
@@ -32,9 +31,7 @@ export interface ExecuteSqlOptions extends RepositoryAccessOptions {
   readonly mode: DatabaseMode;
 }
 
-export interface TransactionSqlOptions extends RepositoryAccessOptions, TransactionOptions {
-  readonly isolationLevel?: TransactionIsolationLevel;
-}
+export interface TransactionSqlOptions extends RepositoryAccessOptions, TransactionOptions {}
 
 /**
  * Everything a transaction touched. Savepoints share the outermost transaction since they

@@ -5,6 +5,7 @@ import { EMPTY, normalizeErrorString } from '@medplum/core';
 import type { Binary, Project } from '@medplum/fhirtypes';
 import { createTransport } from 'nodemailer';
 import type Mail from 'nodemailer/lib/mailer';
+import { sendEmailViaSes } from '../cloud/aws/email';
 import { getConfig } from '../config/loader';
 import type { MedplumSmtpConfig } from '../config/types';
 import type { Repository } from '../fhir/repo';
@@ -13,7 +14,9 @@ import { getBinaryStorage } from '../storage/loader';
 import { applyFromDisplayName, getFromAddress, getProjectAppName, getProjectSmtpConfig } from './utils';
 
 /**
- * Sends via configured SMTP; skips delivery when SMTP is not configured.
+ * Sends an email using the AWS SES service.
+ * Builds the email using nodemailer MailComposer.
+ * See options here: https://nodemailer.com/extras/mailcomposer/
  * @param repo - The user repository.
  * @param options - The MailComposer options.
  * @param project - Optional project for project-level SMTP configuration.
@@ -42,6 +45,8 @@ export async function sendEmail(repo: Repository, options: Mail.Options, project
     await sendEmailViaSmtp(projectSmtp, options, project?.id);
   } else if (config.smtp) {
     await sendEmailViaSmtp(config.smtp, options);
+  } else if (config.emailProvider === 'awsses') {
+    await sendEmailViaSes(options);
   } else {
     globalLogger.warn('Email not configured — skipping send', { to: options.to, subject: options.subject });
   }

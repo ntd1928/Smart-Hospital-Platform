@@ -44,7 +44,6 @@ import { assertMfaLoginActive, reserveMfaAttempt, tryReleaseMfaAttempt } from '.
 import { getConfig } from '../config/loader';
 import { MFA_LOGIN_ATTEMPT_LIMIT } from '../constants';
 import { getAccessPolicyForLogin, getRepoForLogin } from '../fhir/accesspolicy';
-import { getInactiveReason } from '../fhir/projectmembership';
 import type { Repository, SystemRepository } from '../fhir/repo';
 import { getGlobalSystemRepo, getProjectSystemRepo, getShardSystemRepo } from '../fhir/repo';
 import { TODO_SHARD_ID } from '../fhir/sharding';
@@ -404,40 +403,29 @@ export async function getMembershipsForLogin(login: Login): Promise<WithId<Proje
     memberships = memberships.filter((m) => m.profile?.reference?.startsWith(profileType));
   }
 
-  const projects = await systemRepo.readReferences<Project>(memberships.map((m) => m.project));
-  const activeMemberships = memberships.filter((_, i) => {
-    const project = projects[i];
-    return project instanceof Error || !getInactiveReason(project);
-  });
-  if (memberships.length > 0 && activeMemberships.length === 0) {
-    throw new OperationOutcomeError(badRequest('Project not active'));
-  }
-  return activeMemberships;
+  return memberships;
 }
 
 /**
  * Returns the project membership for the client application.
  * @param systemRepo - The system repository.
  * @param client - The client application.
- * @param projectId - Optional project ID (e.g. from a project-scoped URL) to restrict the search to.
  * @returns The project membership for the client application if found; otherwise undefined.
  */
 export function getClientApplicationMembership(
   systemRepo: SystemRepository,
-  client: WithId<ClientApplication>,
-  projectId?: string
+  client: WithId<ClientApplication>
 ): Promise<WithId<ProjectMembership> | undefined> {
-  const filters: Filter[] = [
-    {
-      code: 'user',
-      operator: Operator.EQUALS,
-      value: getReferenceString(client),
-    },
-  ];
-  if (projectId) {
-    filters.push({ code: 'project', operator: Operator.EQUALS, value: 'Project/' + projectId });
-  }
-  return systemRepo.searchOne<ProjectMembership>({ resourceType: 'ProjectMembership', filters });
+  return systemRepo.searchOne<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    filters: [
+      {
+        code: 'user',
+        operator: Operator.EQUALS,
+        value: getReferenceString(client),
+      },
+    ],
+  });
 }
 
 /**
@@ -469,13 +457,13 @@ export async function setLoginMembership(
     throw new OperationOutcomeError(badRequest('Invalid profile'));
   }
 
+  if (membership.active === false) {
+    throw new OperationOutcomeError(badRequest('Profile not active'));
+  }
+
   // Get the project
   const globalSystemRepo = getGlobalSystemRepo();
   const project = await globalSystemRepo.readReference<Project>(membership.project);
-  const inactiveReason = getInactiveReason(project, membership);
-  if (inactiveReason) {
-    throw new OperationOutcomeError(badRequest(inactiveReason));
-  }
   const projectSystemRepo = await getProjectSystemRepo(project);
 
   // Make sure the membership satisfies the project requirements
@@ -513,7 +501,7 @@ export async function setLoginMembership(
   const auditEvent = createAuditEvent(
     UserAuthenticationEvent,
     LoginEvent,
-    project,
+    project.id,
     membership.profile,
     login.remoteAddress,
     AuditEventOutcome.Success
@@ -1076,10 +1064,10 @@ export async function getLoginForAccessToken(
   }
 
   const membership = await globalSystemRepo.readReference<ProjectMembership>(login.membership);
-  const project = await globalSystemRepo.readReference<Project>(membership.project);
-  if (getInactiveReason(project, membership)) {
+  if (membership.active === false) {
     return undefined;
   }
+  const project = await globalSystemRepo.readReference<Project>(membership.project);
   const systemRepo = await getProjectSystemRepo(project);
   return makeAuthResult(systemRepo, req, login, project, membership, { accessToken, remoteAddress: req?.ip });
 }
@@ -1114,16 +1102,12 @@ export async function getLoginForBasicAuth(req: Request, token: string): Promise
     return undefined;
   }
 
-  const membership = await getClientApplicationMembership(systemRepo, client, getProjectIdFromUrl(req.originalUrl));
-  if (!membership) {
+  const membership = await getClientApplicationMembership(systemRepo, client);
+  if (!membership || membership.active === false) {
     return undefined;
   }
 
   const project = await systemRepo.readReference<Project>(membership.project);
-  if (getInactiveReason(project, membership)) {
-    return undefined;
-  }
-
   const login: Login = {
     resourceType: 'Login',
     user: createReference(client),
@@ -1226,18 +1210,6 @@ async function tryAddOnBehalfOf(
     if (!onBehalfOfMembership) {
       throw new OperationOutcomeError(forbidden);
     }
-  }
-
-  let onBehalfOfProject = authState.project;
-  if (resolveId(onBehalfOfMembership.project) !== authState.project.id) {
-    try {
-      onBehalfOfProject = await systemRepo.readReference<Project>(onBehalfOfMembership.project);
-    } catch {
-      throw new OperationOutcomeError(forbidden);
-    }
-  }
-  if (getInactiveReason(onBehalfOfProject, onBehalfOfMembership)) {
-    throw new OperationOutcomeError(forbidden);
   }
 
   const onBehalfOf = await systemRepo.readReference(onBehalfOfMembership.profile as Reference<ProfileResource>);
@@ -1344,7 +1316,7 @@ async function tryExternalAuthLogin(
 
   let membership: WithId<ProjectMembership> | undefined;
   if (client) {
-    membership = await getClientApplicationMembership(systemRepo, client, projectId);
+    membership = await getClientApplicationMembership(systemRepo, client);
   } else if (isString(profileString)) {
     // Path A: fhirUser claim present - look up profile, then find membership
     // Profile string can be either a reference or a search string
@@ -1383,7 +1355,7 @@ async function tryExternalAuthLogin(
       return undefined;
     }
     client = await getExternalBearerClient(projectId, claims.iss);
-    membership = client ? await getClientApplicationMembership(systemRepo, client, projectId) : undefined;
+    membership = client ? await getClientApplicationMembership(systemRepo, client) : undefined;
   } else {
     // Path B: sub claim fallback - look up ProjectMembership by externalId
     // Fetch at most 2 to detect duplicates efficiently; if 2+ exist, the externalId is ambiguous
@@ -1408,12 +1380,7 @@ async function tryExternalAuthLogin(
     membership = entries?.[0]?.resource;
   }
 
-  if (!membership) {
-    return undefined;
-  }
-
-  const project = await systemRepo.readReference<Project>(membership.project);
-  if (getInactiveReason(project, membership)) {
+  if (!membership || membership.active === false) {
     return undefined;
   }
 
@@ -1433,11 +1400,13 @@ async function tryExternalAuthLogin(
     userAgent: req?.get('User-Agent'),
   });
 
+  const project = await systemRepo.readReference<Project>(membership.project);
+
   logAuditEvent(
     createAuditEvent(
       UserAuthenticationEvent,
       LoginEvent,
-      project,
+      project.id,
       membership.profile,
       login.remoteAddress,
       AuditEventOutcome.Success

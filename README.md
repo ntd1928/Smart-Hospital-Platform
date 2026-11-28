@@ -1,117 +1,127 @@
-# Smart Hospital Platform
+# [Medplum](https://www.medplum.com) &middot; [![GitHub license](https://img.shields.io/badge/license-Apache-blue.svg)](https://github.com/medplum/medplum/blob/main/LICENSE.txt) [![npm version](https://img.shields.io/npm/v/@medplum/core.svg?color=blue)](https://www.npmjs.com/package/@medplum/core) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=medplum_medplum&metric=alert_status&token=207c95a43e7519809d6d336d8cc7837d3e057acf)](https://sonarcloud.io/dashboard?id=medplum_medplum) [![Coverage Status](https://coveralls.io/repos/github/medplum/medplum/badge.svg?branch=main)](https://coveralls.io/github/medplum/medplum?branch=main) [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10900/badge?gold)](https://www.bestpractices.dev/projects/10900)
 
-Nền tảng quản lý bệnh viện cho ba nhóm người dùng Admin, Doctor và Patient, xây dựng trong khuôn khổ môn **Phát triển ứng dụng điện toán đám mây**. Phiên bản hiện tại hỗ trợ đăng nhập, phân quyền, quản lý hồ sơ, lịch Appointment/Schedule/Slot và hồ sơ lâm sàng cơ bản trên FHIR API.
+![Medplum](packages/docs/static/img/cover.webp)
 
-Frontend React/TypeScript kết nối backend Node.js, PostgreSQL và Redis. Toàn bộ ứng dụng có thể chạy bằng Docker Compose; GitHub Actions được cấu hình kiểm tra chất lượng, build và kiểm thử tích hợp. Chưa triển khai lên cloud.
+Medplum is a developer platform that enables flexible and rapid development of healthcare apps.
 
-## Chạy demo bằng Docker — khuyến nghị
+- **Medplum Auth** - End-to-end identity solution for easy user authentication, sign-in, and permissions using OAuth, OpenID, and SMART-on-FHIR.
+- **Medplum Clinical Data Repository (CDR)** - Backend server that hosts your healthcare data in a secure, compliant, and standards-based repository.
+- **Medplum API** - FHIR-based API for sending, receiving, and manipulating data.
+- **Medplum SDK** - Client libraries that simplify the process of interacting with the **Medplum API**.
+- **Medplum App** - Web application where you can view your data and perform basic editing tasks. You can also use the Medplum App to manage basic workflows.
+- **Medplum Bots** - Write and run application logic server-side without needing to set up your own server.
+- **UI Component Library** - React components designed to help you quickly develop custom healthcare applications.
 
-Chỉ cần Docker Engine/Desktop và Compose v2 đang chạy; không cần cài Node/npm trên máy. Dừng API/Vite chạy source nếu đang chiếm cổng 8103/3000, rồi chạy tại thư mục repo:
+## Docs
 
-```bash
-docker compose up --build -d --wait --wait-timeout 600
-docker compose ps -a
+- [Contributing](#contributing)
+  - [Ground Rules](#ground-rules)
+  - [Codebase](#codebase)
+    - [Technologies](#technologies)
+    - [Folder Structure](#folder-structure)
+
+## Contributing
+
+**We heartily welcome any and all contributions that match our engineering standards!**
+
+That being said, this codebase isn't your typical open-source project because it's not a library or package with a
+limited scope -- it's our entire product. Our [Contributing documentation](https://medplum.com/docs/contributing) has
+all the information you need to get started.
+
+### Ground Rules
+
+#### Contributions and discussion guidelines
+
+By making a contribution to this project, you are deemed to have accepted the [Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+
+All conversations and communities on Medplum are expected to follow GitHub's [Community Guidelines](https://help.github.com/en/github/site-policy/github-community-guidelines)
+and [Acceptable Use Policies](https://help.github.com/en/github/site-policy/github-acceptable-use-policies). We expect
+discussions on issues and pull requests to stay positive, productive, and respectful. Remember: there are real people on
+the other side of the screen!
+
+#### Reporting a bug or proposing a new feature
+
+If you found a technical bug on Medplum or have ideas for features we should implement, the issue tracker is the best
+place to share with us. ([click here to open a new issue](https://github.com/medplum/medplum/issues/new))
+
+### Writing documentation or blog content
+
+Did you learn how to do something using Medplum that wasn't obvious on your first try? By contributing your new knowledge
+to our documentation, you can help others who might have a similar use case!
+
+Our documentation is hosted on [medplum.com/docs](https://www.medplum.com/docs), but it is built from [Markdown](https://www.markdownguide.org/)
+files in our [`docs` package](https://github.com/medplum/medplum/tree/main/packages/docs/docs).
+
+For relatively small changes, you can edit files directly from your web browser on [GitHub.dev](https://github.dev/medplum/medplum/blob/main/packages/docs/docs/home.md)
+without needing to clone the repository.
+
+#### Fixing a bug or implementing a new feature
+
+To keep new contributors focused on work we're ready to accept, code contributions go through an approval system: your
+Pull Request must be linked to an issue labeled `open-to-community` before we'll review it. This signals that a
+maintainer has explicitly invited community help on that issue. You can link a PR to an issue with a closing keyword
+in the PR description (e.g. `Fixes #123`) or via GitHub's Development panel. PRs that aren't linked to an
+`open-to-community` issue are automatically closed, but can be reopened once the link is added. Established
+contributors and Medplum team members are exempt from this requirement.
+
+If you find a bug, look for an existing issue labeled `open-to-community`, or open a new issue and ask us to label it,
+before starting work on a fix.
+
+If you want to implement a new feature, open an issue first to discuss with us how the feature might work, and to ensure
+it fits into our roadmap and plans for the app.
+
+If you want to contribute but are unsure how to start, we have [a "good first issue" label](https://github.com/medplum/medplum/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) which is applied to newcomer-friendly issues. Take a look at [the full list of good first issues](https://github.com/medplum/medplum/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) and pick something you like!
+
+**Ready to get started writing code?** Follow the [local setup instructions](https://www.medplum.com/docs/contributing/local-dev-setup) and jump in! See our [full contributing guide](https://www.medplum.com/docs/contributing#making-a-contribution) for more details on this process.
+
+### Codebase
+
+#### Technologies
+
+With the ground rules out of the way, let's talk about the coarse architecture of this mono repo:
+
+- **Full-stack TypeScript**: We use Node.js to power our servers, and React to power our frontend apps. Almost all of the code you'll touch in this codebase will be TypeScript.
+
+Here is a list of all the big technologies we use:
+
+- **PostgreSQL**: Data storage
+- **Redis**: Background jobs and caching
+- **Express**: API server
+- **TypeScript**: Type-safe JavaScript
+- **React**: Frontend React app
+
+#### Folder structure
+
+```sh
+medplum/
+├── packages
+│   ├── agent           # On-premise agent
+│   ├── app             # Frontend web app
+│   ├── bot-layer       # AWS Lambda Layer for Bots
+│   ├── cdk             # AWS CDK infra as code
+│   ├── cli             # Command line interface
+│   ├── core            # Core shared library
+│   ├── definitions     # Data definitions
+│   ├── docs            # Documentation
+│   ├── examples        # Example code used in documentation
+│   ├── fhir-router     # FHIR URL router
+│   ├── fhirtypes       # FHIR TypeScript definitions
+│   ├── generator       # Code generator utilities
+│   ├── graphiql        # Preconfigured GraphiQL
+│   ├── hl7             # HL7 client and server
+│   ├── mock            # Mock FHIR data for testing
+│   ├── react           # React component library
+│   ├── react-hooks     # React hooks library
+│   └── server          # Backend API server
+└── scripts             # Helper bash scripts
 ```
 
-Compose chạy PostgreSQL, Redis, seed dữ liệu một lần cho mỗi đợt khởi động, API Node và frontend Nginx. `seed` thoát mã 0 là bình thường; bốn dịch vụ còn lại cần healthy. Lần đầu tải image, dependency và khởi tạo FHIR có thể mất vài phút. Seed idempotent: chạy lại không nhân bản bộ demo, không xóa dữ liệu đã sửa.
+## Thanks
 
-Mở http://localhost:3000; API http://localhost:8103/healthcheck phải có ok/postgres/redis bằng true. Frontend dùng bản build, không phải Vite dev server. Docker vẫn chạy local, chưa phải cloud. Chỉ hỗ trợ trình duyệt trên chính máy này với các cổng mặc định; chưa cấu hình HTTPS hoặc truy cập LAN.
+<a href="https://www.chromatic.com/"><img src="https://user-images.githubusercontent.com/321738/84662277-e3db4f80-af1b-11ea-88f5-91d67a5e59f6.png" width="153" height="30" alt="Chromatic" /></a>
 
-```bash
-docker compose logs --tail=50 seed server web
-docker compose stop
-```
+Thanks to [Chromatic](https://www.chromatic.com/) for providing the visual testing platform that helps us review UI changes and catch visual regressions.
 
-`stop` giữ container và volume. Dùng lại lệnh `up` ở trên để chạy tiếp. Không dùng `down -v` nếu cần giữ dữ liệu. Khi sửa code, chạy lại `up --build` để cập nhật image. Xem [hướng dẫn Docker](docs/development/DOCKER.md) và [demo 10–15 phút](docs/reports/DEMO.md).
+## License
 
-## AWS staging infrastructure
-
-`infra/aws` chứa AWS CDK cho VPC, ECS/Fargate, PostgreSQL RDS, Redis, HTTPS, Route 53, CloudWatch và S3 Binary storage. API ECS dùng task role giới hạn vào prefix `binary/*`; upload Binary chạy qua FHIR API, còn download dùng URL S3 có thời hạn và CORS giới hạn theo hostname app. Local/Docker vẫn lưu Binary trên filesystem. Cấu hình deploy, backup/restore, chi phí và giới hạn nằm trong [hướng dẫn AWS](infra/aws/README.md). Hạ tầng chưa được deploy và chưa có CI/CD hosted.
-
-## Chạy source để phát triển — tùy chọn
-
-Yêu cầu: Node.js theo .nvmrc (22.22.0), npm 11.21.1, Docker Engine/Desktop và Compose v2 đang hoạt động. Với WSL, bật Desktop integration hoặc dùng Engine trong WSL; không cần chạy hai daemon cùng lúc.
-
-```bash
-nvm install
-nvm use
-npm install -g npm@11.21.1
-npm ci
-npm run services:up
-npm run build
-npm run seed
-```
-
-Lần đầu migration/seed FHIR definitions có thể mất vài phút. Sau đó mở hai terminal:
-
-Nếu chưa có nvm nhưng máy có Node/npm cũ, có thể dùng launcher cho từng lệnh, ví dụ `npx --yes --package=node@22.22.0 --package=npm@11.21.1 -- npm ci`, rồi thay phần cuối bằng `npm run seed` hoặc `npm run dev:server`. Launcher dùng cache npm sau lần tải đầu; không cần đổi Node toàn hệ thống.
-
-```bash
-# Terminal 1
-npm run dev:server
-```
-
-```bash
-# Terminal 2
-npm run dev:app
-```
-
-Web: http://localhost:3000 · API: http://localhost:8103 · health: http://localhost:8103/healthcheck. Các trường postgres/redis phải true. Seed lại không nhân bản bộ demo; ID local ở .runtime/demo.json không đưa lên Git.
-
-## Tài khoản demo local
-
-| Vai trò | Email                                           |
-| ------- | ----------------------------------------------- |
-| Admin   | admin@hospital.test                             |
-| Doctor  | doctor1@hospital.test / doctor2@hospital.test   |
-| Patient | patient1@hospital.test / patient2@hospital.test |
-
-Mật khẩu mặc định: `HospitalDemo!2026`. Có thể export DEMO_PASSWORD trước seed lần đầu; chạy lại không đổi mật khẩu tài khoản đã có. Dữ liệu giả lập: 10 Patient, 2 tài khoản Doctor, 4 Appointment và project phụ kiểm thử isolation. Admin có profile Practitioner riêng nên số Practitioner gồm cả Admin.
-
-Backend bootstrap còn có tài khoản super-admin upstream; không dùng tài khoản đó để demo nghiệp vụ. Có thể ghi đè MEDPLUM_DEFAULT_SUPER_ADMIN_EMAIL và MEDPLUM_DEFAULT_SUPER_ADMIN_PASSWORD trước lần tạo database đầu tiên. Cấu hình hiện tại chỉ dành cho localhost.
-
-## Phạm vi
-
-- Đăng nhập/logout/phiên và phân quyền bằng backend thật; dashboard ba vai trò dùng FHIR API.
-- Danh sách, tìm kiếm, thêm, xem, sửa, xóa mềm Patient; quản lý Practitioner cơ bản.
-- Admin tạo tài khoản local, khóa/mở membership; Patient giới hạn compartment của mình.
-- Appointment/Schedule/Slot có kiểm tra trùng lịch; EHR nền tảng với các resource lâm sàng chính.
-- Docker PostgreSQL/Redis, unit/API/E2E và AWS CDK staging baseline.
-
-Chưa có EHR lifecycle đầy đủ, giao diện upload/download tài liệu, AI assistant runtime hoặc môi trường cloud đã triển khai. FHIR Binary API có thể lưu payload trong S3 khi chạy trên stack AWS; local và Docker tiếp tục dùng filesystem.
-
-## Kiểm thử
-
-Với chế độ source, khi API/dịch vụ đã chạy và seed hoàn tất:
-
-```bash
-npx playwright install chromium
-npm run verify
-```
-
-Verify chạy typecheck (cả seed/test), lint mã nhóm, format check, unit test, build, API integration, E2E và AWS CDK typecheck/template/synthesis. API test tạo/xóa dữ liệu tạm và kiểm tra quyền trực tiếp. E2E tự chạy Vite nếu cổng 3000 chưa được dùng. Chỉ chạy integration với database demo local.
-
-Với stack Docker đang chạy, kiểm tra API không cần Node trên host:
-
-```bash
-docker compose run --rm --no-deps -e MEDPLUM_BASE_URL=http://server:8103/ seed npm run test:api
-```
-
-Cách chạy browser test lên bản Nginx và đồng bộ fixture nằm trong [DOCKER.md](docs/development/DOCKER.md).
-
-## Dừng dịch vụ và giữ dữ liệu
-
-```bash
-npm run services:down
-```
-
-Lệnh dừng container, giữ volume. API/web dừng bằng Ctrl+C. Không dùng docker compose down -v nếu cần giữ dữ liệu. Nếu đổi cổng/mật khẩu Compose, export MEDPLUM_DATABASE_* và MEDPLUM_REDIS_* tương ứng cho API và seed; .env Compose không tự export vào Node. Xem [.env.example](.env.example).
-
-`npm run test:persistence` dành riêng cho chế độ source với database/cache được publish bằng Compose dev: dừng API trước, dùng fixture đúng database rồi chạy script; không xóa volume. Sau đó khởi động lại API. Với demo toàn Docker, dùng quy trình stop/up và kiểm tra hồ sơ tại [DOCKER.md](docs/development/DOCKER.md), không chạy script source vào database khác. Nếu WSL không dùng systemd và Engine chưa chạy, có thể mở terminal riêng chạy `sudo dockerd`; không khởi động thêm Engine khi đã dùng Docker Desktop integration.
-
-## Tài liệu
-
-- [Kiến trúc](docs/architecture/ARCHITECTURE.md), [API](docs/architecture/API.md) và [kế hoạch tuần 5–14](docs/PLAN.md).
-- [Context kỹ thuật](docs/development/CONTEXT.md), [đóng góp](CONTRIBUTING.md) và [CI](docs/development/CI.md).
-- [Phân loại tài liệu](docs/development/DOCUMENTATION.md), [AI research](docs/research/AI-RESEARCH.md) và [demo](docs/reports/DEMO.md).
-- [AGENTS.md](AGENTS.md): quy tắc cho coding agent.
+[Apache 2.0](LICENSE.txt)

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { ClientApplication, IdentityProvider, Project, ProjectSetting } from '@medplum/fhirtypes';
-type KeepJobs = { age?: number; count?: number };
+import type { KeepJobs } from 'bullmq';
 
 export interface MedplumServerConfig {
   port: number;
@@ -53,7 +53,6 @@ export interface MedplumServerConfig {
    * Separating background job queues from other purposes can improve performance under high load by isolating job queue operations.
    */
   backgroundJobsRedis?: MedplumRedisConfig;
-  shards?: Record<string, MedplumShardConfig>;
   emailProvider?: 'none' | 'awsses' | 'smtp';
   smtp?: MedplumSmtpConfig;
   /** Allow projects to configure their own SMTP transport via Project.secret entries. Default is `true`. */
@@ -255,15 +254,6 @@ export interface MedplumServerConfig {
   enabledSearchParameters?: string[];
 
   /**
-   * Optional list of resource types for which chained search is disabled.
-   * References from these types are no longer written to the `<ResourceType>_References` lookup table,
-   * and chained searches (including `_has`) that require that table are rejected.
-   * Re-enabling chained search for a type requires a reindex of that type.
-   * Project Admin types are ignored, since their references may be required for system functionality.
-   */
-  disableChainedSearch?: string[];
-
-  /**
    * Optional customizations to the server generated CapabilityStatement.
    */
   capabilityStatement?: MedplumCapabilityStatementConfig;
@@ -426,7 +416,6 @@ export type WorkerName =
   | 'cron'
   | 'reindex'
   | 'batch'
-  | 'bulk-export'
   | 'post-deploy-migration'
   | 'set-accounts'
   | 'lambda-cleaner'
@@ -453,11 +442,4 @@ export interface MedplumFissionConfig {
   readonly environmentName: string;
   readonly routerHost: string;
   readonly routerPort: number;
-}
-
-export interface MedplumShardConfig {
-  /** Place new projects on this shard. Only one shard may set this; when none do, new projects go on the global shard. */
-  isDefaultShard?: boolean;
-  database: MedplumDatabaseConfig;
-  readonlyDatabase?: MedplumDatabaseConfig;
 }

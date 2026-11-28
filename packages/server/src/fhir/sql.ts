@@ -13,7 +13,6 @@ import type { Period } from '@medplum/fhirtypes';
 import { env } from 'node:process';
 import type { Pool, PoolClient } from 'pg';
 import { getLogger, globalLogger } from '../logger';
-import { getConnectionShardId } from '../sharding/connection-shard-id';
 import type { ColumnSearchParameterImplementation } from './searchparameter';
 
 let DEBUG: string | undefined = env['SQL_DEBUG'];
@@ -52,7 +51,7 @@ export type ColumnType = (typeof ColumnType)[keyof typeof ColumnType];
 
 export type OperatorFunc = (sql: SqlBuilder, column: Column, parameter: any, paramType?: string) => void;
 
-export type TransactionIsolationLevel = 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE';
+export type TransactionIsolationLevel = 'REPEATABLE READ' | 'SERIALIZABLE';
 
 export const Operator = {
   '=': (sql: SqlBuilder, column: Column, parameter: any, _paramType?: string) => {
@@ -657,14 +656,9 @@ export class SqlBuilder {
   async execute(conn: PgQueryable): Promise<{ rowCount: number; rows: any[] }> {
     const sql = this.toString();
     let startTime = 0;
-    let debugPrefix = '';
     if (this.debug) {
-      const shardId = getConnectionShardId(conn);
-      if (shardId) {
-        debugPrefix = `[${shardId}] `;
-      }
-      globalLogger.write(`${debugPrefix}sql ${sql}`);
-      globalLogger.write(`${debugPrefix}values ${JSON.stringify(this.values)}`);
+      globalLogger.write(`sql ${sql}`);
+      globalLogger.write(`values ${JSON.stringify(this.values)}`);
       startTime = Date.now();
     }
     try {
@@ -672,7 +666,7 @@ export class SqlBuilder {
       if (this.debug) {
         const endTime = Date.now();
         const duration = endTime - startTime;
-        globalLogger.write(`${debugPrefix}result: ${result.rowCount ?? 0} rows (${duration} ms)`);
+        globalLogger.write(`result: ${result.rowCount ?? 0} rows (${duration} ms)`);
       }
 
       return { rowCount: result.rowCount ?? 0, rows: result.rows };

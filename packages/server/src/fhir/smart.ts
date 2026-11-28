@@ -26,17 +26,6 @@ import type { AuthState } from '../oauth/middleware';
 import { getProjectScopedUrl } from '../util/url';
 import type { PopulatedAccessPolicy } from './accesspolicy';
 
-export const SMART_SCOPES_SUPPORTED = [
-  'patient/*.rs',
-  'user/*.cruds',
-  'openid',
-  'fhirUser',
-  'launch',
-  'launch/patient',
-  'offline_access',
-  'online_access',
-];
-
 const smartScopeFormat = /^(patient|user|system)\/(\w+|\*)\.(read|write|c?r?u?d?s?|\*)$/;
 
 const missingPatientContext = 'Missing patient context for patient/ scope';
@@ -81,7 +70,16 @@ export function smartConfigurationHandler(req: Request, res: Response): void {
         OAuthSigningAlgorithm.RS384,
         OAuthSigningAlgorithm.ES384,
       ],
-      scopes_supported: SMART_SCOPES_SUPPORTED,
+      scopes_supported: [
+        'patient/*.rs',
+        'user/*.cruds',
+        'openid',
+        'fhirUser',
+        'launch',
+        'launch/patient',
+        'offline_access',
+        'online_access',
+      ],
       response_types_supported: ['code'],
       introspection_endpoint: getProjectScopedUrl(req.originalUrl, config.baseUrl, config.introspectUrl),
       capabilities: [

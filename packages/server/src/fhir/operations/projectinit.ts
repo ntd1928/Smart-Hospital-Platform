@@ -172,6 +172,7 @@ export async function createProject(
           strictMode: true,
           features: config.defaultProjectFeatures,
           systemSetting: config.defaultProjectSystemSetting,
+          defaultPatientAccessPolicy: createReference(patientAccessPolicy),
           defaultAccessPolicies: [
             { profileType: 'Patient', accessPolicy: createReference(patientAccessPolicy) },
             { profileType: 'RelatedPerson', accessPolicy: createReference(relatedPersonAccessPolicy) },
@@ -224,7 +225,7 @@ async function createPatientCompartmentAccessPolicy(
     resource: [
       { resourceType: 'Patient', criteria: 'Patient?_id=%patient.id' },
       { resourceType: 'AllergyIntolerance', criteria: 'AllergyIntolerance?_compartment=%patient' },
-      { resourceType: 'Appointment', criteria: 'Appointment?_compartment=%patient', interaction: ['read', 'search'] },
+      { resourceType: 'Appointment', criteria: 'Appointment?_compartment=%patient' },
       { resourceType: 'CarePlan', criteria: 'CarePlan?_compartment=%patient' },
       { resourceType: 'CareTeam', criteria: 'CareTeam?_compartment=%patient' },
       { resourceType: 'Communication', criteria: 'Communication?sender=%patient' },
@@ -238,11 +239,6 @@ async function createPatientCompartmentAccessPolicy(
       { resourceType: 'Immunization', criteria: 'Immunization?_compartment=%patient' },
       { resourceType: 'MedicationRequest', criteria: 'MedicationRequest?_compartment=%patient' },
       { resourceType: 'MedicationStatement', criteria: 'MedicationStatement?_compartment=%patient' },
-      {
-        resourceType: 'MedicationAdministration',
-        criteria: 'MedicationAdministration?_compartment=%patient',
-        interaction: ['read', 'search'],
-      },
       { resourceType: 'Observation', criteria: 'Observation?_compartment=%patient' },
       { resourceType: 'Procedure', criteria: 'Procedure?_compartment=%patient' },
       { resourceType: 'QuestionnaireResponse', criteria: 'QuestionnaireResponse?_compartment=%patient' },
@@ -268,15 +264,11 @@ async function createAdminAccessPolicy(
 }
 
 /**
- * Resource types that non-admin Practitioners can read but not edit directly. Some clinical writes
- * are handled by validated operations, while curated knowledge and conformance resources are managed
- * at the project/admin level.
+ * Resource types that non-admin Practitioners can read but not edit. These are curated knowledge,
+ * terminology, and conformance resources typically managed at the project/admin level rather than
+ * by front-line users.
  */
 export const PRACTITIONER_READONLY_RESOURCE_TYPES: ResourceType[] = [
-  'MedicationAdministration',
-  'Organization',
-  'HealthcareService',
-  'PractitionerRole',
   'MedicationKnowledge',
   'PlanDefinition',
   'ActivityDefinition',

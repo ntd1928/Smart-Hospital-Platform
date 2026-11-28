@@ -2,16 +2,59 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { Attributes, Counter, Gauge, Histogram, Meter, MetricOptions, UpDownCounter } from '@opentelemetry/api';
 import { metrics } from '@opentelemetry/api';
+import type { Queue } from 'bullmq';
 import os from 'node:os';
+import v8 from 'node:v8';
 import type { WorkerName } from '../config/types';
+import { DatabaseMode, getDatabasePool } from '../database';
+import { heartbeat } from '../heartbeat';
+import { getBatchQueue } from '../workers/batch';
+import { getCronQueue } from '../workers/cron';
+import { getDownloadQueue } from '../workers/download';
+import { getSetAccountsQueue } from '../workers/set-accounts';
+import { getSubscriptionQueue } from '../workers/subscription';
 
+/**
+ * Metrics recorded once per queue.
+ *
+ * `waitingCount`, `delayedCount` and `activeCount` are gauges the heartbeat reads out of Redis, so
+ * they describe the streams backing the queue as the whole cluster sees them -- the metrics for
+ * backlog and saturation. `inFlightJobs` (an UpDownCounter moved up as a job starts and down as it
+ * settles) and `jobsCompleted` (incremented when a processor returns without throwing) are maintained
+ * by the worker itself and describe a single host, which is what makes per-host throughput derivable
+ * from them.
+ *
+ * The two groups are not expected to agree: `activeCount` includes jobs leased by a host that has
+ * since died and whose lock has not yet expired, and `jobsCompleted` is a BullMQ-level signal, so a
+ * processor that handles a failure internally and returns normally still counts as completed.
+ */
 export type QueueMetric = 'waitingCount' | 'delayedCount' | 'activeCount' | 'inFlightJobs' | 'jobsCompleted';
 
 export function getQueueMetricName(queueName: WorkerName, metric: QueueMetric): string {
   return `medplum.${queueName}.${metric}`;
 }
 
-// These helpers use the global OpenTelemetry API; no exporter is initialized here.
+let queueEntries: [WorkerName, Queue][] | undefined;
+function getQueueEntries(): [WorkerName, Queue][] {
+  if (!queueEntries) {
+    if (!(getSubscriptionQueue() && getCronQueue() && getDownloadQueue() && getBatchQueue() && getSetAccountsQueue())) {
+      throw new Error('Queues not initialized');
+    }
+    queueEntries = [
+      ['subscription', getSubscriptionQueue() as Queue],
+      ['cron', getCronQueue() as Queue],
+      ['download', getDownloadQueue() as Queue],
+      ['batch', getBatchQueue() as Queue],
+      ['set-accounts', getSetAccountsQueue() as Queue],
+    ];
+  }
+  return queueEntries;
+}
+
+// This file includes OpenTelemetry helpers.
+// Note that this file is related but separate from the OpenTelemetry initialization code in instrumentation.ts.
+// The instrumentation.ts code is used to initialize OpenTelemetry.
+// This file is used to record metrics.
 
 const hostname = os.hostname();
 export const BASE_METRIC_OPTIONS = { attributes: { hostname } } satisfies RecordMetricOptions;
@@ -103,4 +146,76 @@ export function addToUpDownCounter(name: string, delta: number, options?: Record
 
 function isOtelMetricsEnabled(): boolean {
   return !!process.env.OTLP_METRICS_ENDPOINT;
+}
+
+export function initOtelHeartbeat(): void {
+  if (otelHeartbeatListener) {
+    return;
+  }
+  otelHeartbeatListener = async () => {
+    const writerPool = getDatabasePool(DatabaseMode.WRITER);
+    const readerPool = getDatabasePool(DatabaseMode.READER);
+
+    setGauge('medplum.db.totalConnections', writerPool.totalCount, {
+      ...BASE_METRIC_OPTIONS,
+      attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'writer' },
+    });
+    setGauge('medplum.db.idleConnections', writerPool.idleCount, {
+      ...BASE_METRIC_OPTIONS,
+      attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'writer' },
+    });
+    setGauge('medplum.db.queriesAwaitingClient', writerPool.waitingCount, {
+      ...BASE_METRIC_OPTIONS,
+      attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'writer' },
+    });
+
+    if (writerPool !== readerPool) {
+      setGauge('medplum.db.totalConnections', readerPool.totalCount, {
+        ...BASE_METRIC_OPTIONS,
+        attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'reader' },
+      });
+      setGauge('medplum.db.idleConnections', readerPool.idleCount, {
+        ...BASE_METRIC_OPTIONS,
+        attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'reader' },
+      });
+      setGauge('medplum.db.queriesAwaitingClient', readerPool.waitingCount, {
+        ...BASE_METRIC_OPTIONS,
+        attributes: { ...BASE_METRIC_OPTIONS.attributes, dbInstanceType: 'reader' },
+      });
+    }
+
+    const heapStats = v8.getHeapStatistics();
+    setGauge('medplum.node.usedHeapSize', heapStats.used_heap_size, BASE_METRIC_OPTIONS);
+
+    const heapSpaceStats = v8.getHeapSpaceStatistics();
+    setGauge(
+      'medplum.node.oldSpaceUsedSize',
+      heapSpaceStats.find((entry) => entry.space_name === 'old_space')?.space_used_size ?? -1,
+      BASE_METRIC_OPTIONS
+    );
+    setGauge(
+      'medplum.node.newSpaceUsedSize',
+      heapSpaceStats.find((entry) => entry.space_name === 'new_space')?.space_used_size ?? -1,
+      BASE_METRIC_OPTIONS
+    );
+
+    for (const [queueName, queue] of getQueueEntries()) {
+      if (queue) {
+        setGauge(getQueueMetricName(queueName, 'waitingCount'), await queue.getWaitingCount());
+        setGauge(getQueueMetricName(queueName, 'delayedCount'), await queue.getDelayedCount());
+        setGauge(getQueueMetricName(queueName, 'activeCount'), await queue.getActiveCount());
+      }
+    }
+  };
+  heartbeat.addEventListener('heartbeat', otelHeartbeatListener);
+}
+
+export function cleanupOtelHeartbeat(): void {
+  if (otelHeartbeatListener) {
+    heartbeat.removeEventListener('heartbeat', otelHeartbeatListener);
+    otelHeartbeatListener = undefined;
+  }
+  if (queueEntries) {
+    queueEntries = undefined;
+  }
 }

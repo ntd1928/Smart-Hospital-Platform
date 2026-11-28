@@ -1,18 +1,13 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import { concatUrls, projectAdminResourceTypes } from '@medplum/core';
+import { concatUrls } from '@medplum/core';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { getLogger } from '../logger';
-import type { MedplumServerConfig, MedplumShardConfig } from './types';
+import type { MedplumServerConfig } from './types';
 
 const DEFAULT_AWS_REGION = 'us-east-1';
 
-/** Config after addDefaults: defaulted settings are required, and each shard has its `id`. */
-export type ServerConfig = MedplumServerConfig &
-  Required<Pick<MedplumServerConfig, DefaultConfigKeys>> & { shards?: Record<string, ShardConfig> };
-
-/** A shard config with its `id` filled in from its key in `shards`. */
-export type ShardConfig = MedplumShardConfig & { id: string };
+export type ServerConfig = MedplumServerConfig & Required<Pick<MedplumServerConfig, DefaultConfigKeys>>;
 
 /**
  * Adds default values to the config.
@@ -63,11 +58,6 @@ export function addDefaults(config: MedplumServerConfig): ServerConfig {
   config.asyncDelayScaling ??= 5;
   config.aiRealtimeTranscriptionUrl ??= 'wss://api.openai.com/v1/realtime?intent=transcription';
 
-  const ignoredResourceTypes = projectAdminResourceTypes.filter((rt) => config.disableChainedSearch?.includes(rt));
-  for (const resourceType of ignoredResourceTypes) {
-    getLogger().warn(`Ignoring ${resourceType} in disableChainedSearch: its references are always indexed`);
-  }
-
   // Automatically generate a signing key if using built-in storage and no signing key is provided
   if (config.storageBaseUrl.startsWith(config.baseUrl) && !config.signingKey) {
     getLogger().warn(
@@ -92,13 +82,6 @@ export function addDefaults(config: MedplumServerConfig): ServerConfig {
     config.signingKeyPassphrase = passphrase;
   }
 
-  if (config.shards && Object.keys(config.shards).length > 0) {
-    for (const [shardId, shardConfig] of Object.entries(config.shards)) {
-      (shardConfig as ShardConfig).id = shardId;
-    }
-  } else {
-    config.shards = undefined;
-  }
   return config as ServerConfig;
 }
 
@@ -110,7 +93,6 @@ type DefaultConfigKeys =
   | 'tokenUrl'
   | 'userInfoUrl'
   | 'introspectUrl'
-  | 'registerUrl'
   | 'storageBaseUrl'
   | 'maxJsonSize'
   | 'maxBatchSize'
@@ -136,7 +118,6 @@ type DefaultConfigKeys =
   | 'defaultAuthRateLimit'
   | 'defaultMfaRateLimit'
   | 'defaultFhirQuota'
-  | 'defaultMaxUserWebSocketSubscriptions'
   | 'aiRealtimeTranscriptionUrl'
   | 'asyncDelayScaling'
   | 'serverScopedSubscriptionsEnabled';
@@ -226,7 +207,6 @@ const booleanKeys = new Set([
   'requireVerifiedEmailForProjectCreation',
   'serverScopedSubscriptionsEnabled',
   'storeBotInput',
-  'isDefaultShard',
   'require',
   'rejectUnauthorized',
   'fhirSearchDiscourageSeqScan',
@@ -248,7 +228,6 @@ const objectKeys = new Set([
   'smtp',
   'arrayColumnPadding',
   'subscriptionAutoDisable',
-  'shards',
   'workers',
   'workers.enabled',
   'workers.bullmq',
@@ -258,51 +237,32 @@ export function isObjectConfig(key: string): boolean {
   return objectKeys.has(key);
 }
 
-const arrayKeys = new Set(['blockedEmailDomains', 'disableChainedSearch']);
+const arrayKeys = new Set(['blockedEmailDomains']);
 
 export function isArrayConfig(key: string): boolean {
   return arrayKeys.has(key);
 }
 
-/**
- * Keys that `obj[key] = value` would turn into a prototype write (`__proto__` invokes the setter;
- * `constructor.prototype` walks to `Object.prototype`). No config setting uses them.
- */
-export const unsafeConfigKeys: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
-
 export function setValue(config: Record<string, unknown>, key: string, value: string): void {
   const keySegments = key.split('.');
-  if (keySegments.some((segment) => unsafeConfigKeys.has(segment))) {
-    throw new Error(`Invalid config key: ${key}`);
-  }
   let obj = config;
 
   while (keySegments.length > 1) {
     const segment = keySegments.shift() as string;
-    // Own-property check so inherited members (e.g. toString) are never descended into and mutated
-    if (!Object.hasOwn(obj, segment) || !obj[segment]) {
+    if (!obj[segment]) {
       obj[segment] = {};
     }
     obj = obj[segment] as Record<string, unknown>;
   }
 
-  // Shard settings are typed like their top-level equivalents: shards.<id>.database.port → database.port
-  let typeKey = key;
-  if (key.startsWith('shards.')) {
-    const idEnd = key.indexOf('.', 'shards.'.length);
-    if (idEnd !== -1) {
-      typeKey = key.slice(idEnd + 1);
-    }
-  }
-
-  let parsedValue: unknown = value;
-  if (isIntegerConfig(typeKey)) {
+  let parsedValue: any = value;
+  if (isIntegerConfig(key)) {
     parsedValue = Number.parseInt(value, 10);
-  } else if (isBooleanConfig(typeKey)) {
+  } else if (isBooleanConfig(key)) {
     parsedValue = value === 'true';
-  } else if (isObjectConfig(typeKey)) {
+  } else if (isObjectConfig(key)) {
     parsedValue = JSON.parse(value);
-  } else if (isArrayConfig(typeKey)) {
+  } else if (isArrayConfig(key)) {
     parsedValue = value.split(',').map((v) => v.trim());
   }
 

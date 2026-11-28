@@ -6,7 +6,7 @@ import dns from 'node:dns';
 import type { Dispatcher } from 'undici';
 import { Agent, buildConnector } from 'undici';
 import { getConfig } from '../config/loader';
-import type { ServerConfig } from '../config/utils';
+import type { MedplumServerConfig } from '../config/types';
 
 export interface OutboundUrlValidationOptions {
   readonly allowHttp?: boolean;
@@ -122,7 +122,7 @@ export function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise
  */
 export function isAllowedOutboundUrlForQueue(
   value: string,
-  config: Pick<ServerConfig, 'allowUnsafeOutbound'>
+  config: Pick<MedplumServerConfig, 'allowUnsafeOutbound'>
 ): boolean {
   try {
     validateOutboundUrl(value, {
